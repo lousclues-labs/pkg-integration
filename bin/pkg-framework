@@ -1,0 +1,356 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# pkg-framework -- CLI for managing the vendored framework in a source
+# project.
+#
+# Subcommands:
+#   version            print the framework version
+#   new <name>         scaffold pkg/ + .github/workflows in a fresh repo
+#   sync [--bump]      refresh vendored copies in this repo
+#   verify [--quiet]   sha256-check vendored copies against upstream
+#
+# Discovery: the CLI derives the upstream framework path from its own
+# location (../lib relative to this script). Override with
+# --framework-path PATH or PKG_FRAMEWORK_HOME env var.
+#
+# The target source repo is the current working directory by default.
+# Override with --target PATH.
+
+set -euo pipefail
+
+CLI_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_FRAMEWORK_HOME="$(cd -- "$CLI_DIR/.." && pwd)"
+FRAMEWORK_HOME="${PKG_FRAMEWORK_HOME:-$DEFAULT_FRAMEWORK_HOME}"
+TARGET=""
+
+# Files vendored into source repos. Each entry: "src:dest" with src
+# relative to $FRAMEWORK_HOME and dest relative to source repo root.
+# Order: directories implied by paths are created on demand.
+VENDORED_FILES=(
+    "lib/framework.sh:pkg/lib/framework.sh"
+    "lib/layout-check.sh:pkg/lib/layout-check.sh"
+    "lib/input-tests.sh:pkg/lib/input-tests.sh"
+    "VERSION:pkg/lib/VERSION"
+    "lib/pkg-build.yml.tmpl:.github/workflows/pkg-build.yml"
+)
+
+# Files used only by `new`, not by `sync`.
+SCAFFOLD_FILES=(
+    "lib/build.sh.example:pkg/build.sh"
+    "lib/project.sh.example:pkg/project.sh"
+)
+
+# -------------------------------------------------------------------------
+# Helpers
+# -------------------------------------------------------------------------
+die() {
+    printf 'pkg-framework: %s\n' "$*" >&2
+    exit 1
+}
+
+ok() {
+    printf '  ok:   %s\n' "$*"
+}
+
+warn() {
+    printf '  warn: %s\n' "$*"
+}
+
+framework_version() {
+    if [[ ! -r "$FRAMEWORK_HOME/VERSION" ]]; then
+        die "framework VERSION not found at $FRAMEWORK_HOME/VERSION (use --framework-path)"
+    fi
+    tr -d '\r\n' < "$FRAMEWORK_HOME/VERSION"
+}
+
+# -------------------------------------------------------------------------
+# Argument parsing (shared across subcommands)
+# -------------------------------------------------------------------------
+parse_global_args() {
+    REMAINING=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --framework-path)
+                shift
+                [[ $# -gt 0 ]] || die '--framework-path requires a value'
+                FRAMEWORK_HOME="$(cd -- "$1" && pwd)" || die "--framework-path $1 not a directory"
+                shift
+                ;;
+            --target)
+                shift
+                [[ $# -gt 0 ]] || die '--target requires a value'
+                TARGET="$(cd -- "$1" && pwd)" || die "--target $1 not a directory"
+                shift
+                ;;
+            *)
+                REMAINING+=("$1")
+                shift
+                ;;
+        esac
+    done
+}
+
+ensure_target() {
+    if [[ -z "$TARGET" ]]; then
+        TARGET="$(pwd)"
+    fi
+    [[ -d "$TARGET" ]] || die "target $TARGET is not a directory"
+}
+
+# -------------------------------------------------------------------------
+# Subcommand: version
+# -------------------------------------------------------------------------
+cmd_version() {
+    printf '%s\n' "$(framework_version)"
+}
+
+# -------------------------------------------------------------------------
+# Subcommand: new <name>
+# -------------------------------------------------------------------------
+cmd_new() {
+    local name="${REMAINING[0]:-}"
+    [[ -n "$name" ]] || die 'usage: pkg-framework new <project-name>'
+
+    if [[ ! "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+        die "project name '$name' violates debian naming (lowercase alnum + hyphen)"
+    fi
+
+    ensure_target
+
+    # No-clobber check across every file we'd write.
+    local dest existing=()
+    for entry in "${VENDORED_FILES[@]}" "${SCAFFOLD_FILES[@]}"; do
+        dest="${entry##*:}"
+        if [[ -e "$TARGET/$dest" ]]; then
+            existing+=("$dest")
+        fi
+    done
+    if [[ "${#existing[@]}" -gt 0 ]]; then
+        printf 'pkg-framework: refuses to overwrite existing files in %s:\n' "$TARGET" >&2
+        printf '  - %s\n' "${existing[@]}" >&2
+        printf '\nUse `pkg-framework sync` to refresh vendored files in an existing repo.\n' >&2
+        exit 1
+    fi
+
+    local fv
+    fv="$(framework_version)"
+
+    # Stage the scaffolded files with substitutions.
+    local upper
+    upper="$(printf '%s' "$name" | tr '[:lower:]-' '[:upper:]_')"
+
+    printf 'scaffolding pkg-framework project "%s" (framework %s) into %s\n' \
+        "$name" "$fv" "$TARGET"
+
+    for entry in "${VENDORED_FILES[@]}" "${SCAFFOLD_FILES[@]}"; do
+        local src="${entry%%:*}"
+        dest="${entry##*:}"
+        local src_full="$FRAMEWORK_HOME/$src"
+        local dest_full="$TARGET/$dest"
+        install -D -m 0644 "$src_full" "$dest_full"
+        ok "wrote $dest"
+    done
+
+    # Make the entry points executable.
+    chmod 0755 "$TARGET/pkg/build.sh"
+
+    # Substitute placeholders in the scaffolded project.sh.
+    local proj="$TARGET/pkg/project.sh"
+    sed -i.bak \
+        -e "s/^PKG_NAME=myproject/PKG_NAME=$name/" \
+        -e "s/^PKG_PREFIX=MYPROJECT/PKG_PREFIX=$upper/" \
+        -e "s/^FRAMEWORK_VERSION=.*/FRAMEWORK_VERSION=$fv/" \
+        "$proj"
+    rm -f "${proj}.bak"
+    ok "substituted PKG_NAME=$name PKG_PREFIX=$upper FRAMEWORK_VERSION=$fv in pkg/project.sh"
+
+    cat <<EOF
+
+Next steps:
+  1. Edit pkg/project.sh and replace the example fields (summary,
+     description, vendor, maintainer, URLs, license, binaries, deps).
+  2. Implement project_stage_extra / project_postinst_body hooks if
+     your project ships configs, polkit, sudoers, etc.
+  3. Commit and push. The pkg-build workflow runs on every PR.
+EOF
+}
+
+# -------------------------------------------------------------------------
+# Subcommand: sync
+# -------------------------------------------------------------------------
+cmd_sync() {
+    ensure_target
+
+    local bump=0
+    local arg
+    for arg in "${REMAINING[@]}"; do
+        case "$arg" in
+            --bump) bump=1 ;;
+            *) die "unknown sync flag: $arg" ;;
+        esac
+    done
+
+    local fv
+    fv="$(framework_version)"
+
+    local proj="$TARGET/pkg/project.sh"
+    if [[ ! -r "$proj" ]]; then
+        die "$proj not found -- is this a pkg-framework source repo? (use \`new\` to scaffold)"
+    fi
+
+    # Detect pinned version in project.sh.
+    local pinned
+    pinned=$(awk -F= '/^FRAMEWORK_VERSION[[:space:]]*=/ {gsub(/[" ]/, "", $2); print $2; exit}' "$proj")
+
+    if [[ -z "$pinned" ]]; then
+        warn "no FRAMEWORK_VERSION pin in pkg/project.sh -- adding $fv"
+    elif [[ "$pinned" != "$fv" ]]; then
+        if [[ "$bump" -ne 1 ]]; then
+            printf 'pkg-framework: pinned FRAMEWORK_VERSION=%s but upstream is %s\n' \
+                "$pinned" "$fv" >&2
+            printf 'Use `pkg-framework sync --bump` to acknowledge the version change.\n' >&2
+            exit 1
+        fi
+        warn "bumping FRAMEWORK_VERSION pin from $pinned to $fv"
+    else
+        ok "FRAMEWORK_VERSION pin already at $fv"
+    fi
+
+    # Copy each vendored file (overwrite).
+    local entry src dest
+    for entry in "${VENDORED_FILES[@]}"; do
+        src="${entry%%:*}"
+        dest="${entry##*:}"
+        install -D -m 0644 "$FRAMEWORK_HOME/$src" "$TARGET/$dest"
+        ok "synced $dest"
+    done
+
+    # Update the FRAMEWORK_VERSION pin in pkg/project.sh.
+    if grep -qE '^FRAMEWORK_VERSION[[:space:]]*=' "$proj"; then
+        sed -i.bak -E "s/^FRAMEWORK_VERSION[[:space:]]*=.*/FRAMEWORK_VERSION=$fv/" "$proj"
+        rm -f "${proj}.bak"
+    else
+        # Append the pin.
+        printf '\nFRAMEWORK_VERSION=%s\n' "$fv" >> "$proj"
+    fi
+    ok "FRAMEWORK_VERSION=$fv pinned in pkg/project.sh"
+
+    printf '\nsync complete (framework %s)\n' "$fv"
+    printf 'Recommended: run `pkg-framework verify` to confirm the working tree matches.\n'
+}
+
+# -------------------------------------------------------------------------
+# Subcommand: verify
+# -------------------------------------------------------------------------
+cmd_verify() {
+    ensure_target
+
+    local quiet=0
+    local arg
+    for arg in "${REMAINING[@]}"; do
+        case "$arg" in
+            --quiet) quiet=1 ;;
+            *) die "unknown verify flag: $arg" ;;
+        esac
+    done
+
+    local entry src dest src_sha dest_sha mismatches=0
+    for entry in "${VENDORED_FILES[@]}"; do
+        src="${entry%%:*}"
+        dest="${entry##*:}"
+        local src_full="$FRAMEWORK_HOME/$src"
+        local dest_full="$TARGET/$dest"
+        if [[ ! -r "$src_full" ]]; then
+            die "upstream missing: $src_full"
+        fi
+        if [[ ! -r "$dest_full" ]]; then
+            printf 'pkg-framework: MISSING %s (run `pkg-framework sync`)\n' "$dest" >&2
+            mismatches=$(( mismatches + 1 ))
+            continue
+        fi
+        src_sha=$(sha256sum "$src_full" | awk '{print $1}')
+        dest_sha=$(sha256sum "$dest_full" | awk '{print $1}')
+        if [[ "$src_sha" != "$dest_sha" ]]; then
+            printf 'pkg-framework: DRIFT  %s\n' "$dest" >&2
+            printf '  upstream sha256: %s\n' "$src_sha" >&2
+            printf '  vendored sha256: %s\n' "$dest_sha" >&2
+            mismatches=$(( mismatches + 1 ))
+        elif [[ "$quiet" -ne 1 ]]; then
+            ok "$dest"
+        fi
+    done
+
+    # Also check the FRAMEWORK_VERSION pin matches.
+    local proj="$TARGET/pkg/project.sh"
+    if [[ -r "$proj" ]]; then
+        local pinned fv
+        pinned=$(awk -F= '/^FRAMEWORK_VERSION[[:space:]]*=/ {gsub(/[" ]/, "", $2); print $2; exit}' "$proj")
+        fv="$(framework_version)"
+        if [[ -z "$pinned" ]]; then
+            printf 'pkg-framework: pkg/project.sh has no FRAMEWORK_VERSION pin\n' >&2
+            mismatches=$(( mismatches + 1 ))
+        elif [[ "$pinned" != "$fv" ]]; then
+            printf 'pkg-framework: FRAMEWORK_VERSION pin %s != upstream %s\n' \
+                "$pinned" "$fv" >&2
+            mismatches=$(( mismatches + 1 ))
+        elif [[ "$quiet" -ne 1 ]]; then
+            ok "FRAMEWORK_VERSION pin matches ($fv)"
+        fi
+    fi
+
+    if [[ "$mismatches" -gt 0 ]]; then
+        printf '\n%d drift(s) detected\n' "$mismatches" >&2
+        exit 1
+    fi
+    [[ "$quiet" -eq 1 ]] || printf '\nverified clean (framework %s)\n' "$(framework_version)"
+}
+
+# -------------------------------------------------------------------------
+# Dispatch
+# -------------------------------------------------------------------------
+usage() {
+    cat <<'EOF'
+usage: pkg-framework <subcommand> [args]
+
+subcommands:
+  version                  print framework version
+  new <name>               scaffold pkg/ + .github/workflows in cwd
+  sync [--bump]            refresh vendored files in this source repo
+  verify [--quiet]         sha256-check vendored files against upstream
+
+options (any subcommand):
+  --framework-path PATH    upstream framework dir (default: derived from
+                           cli location; env: PKG_FRAMEWORK_HOME)
+  --target PATH            source repo to operate on (default: cwd)
+
+EOF
+}
+
+main() {
+    if [[ $# -eq 0 ]]; then
+        usage
+        exit 64
+    fi
+    local sub="$1"
+    shift
+    case "$sub" in
+        -h|--help|help) usage; exit 0 ;;
+    esac
+
+    parse_global_args "$@"
+
+    case "$sub" in
+        version) cmd_version ;;
+        new)     cmd_new ;;
+        sync)    cmd_sync ;;
+        verify)  cmd_verify ;;
+        *)
+            printf 'pkg-framework: unknown subcommand: %s\n' "$sub" >&2
+            usage >&2
+            exit 64
+            ;;
+    esac
+}
+
+main "$@"

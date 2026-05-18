@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# pkg/project.sh -- pkg-framework manifest (EXAMPLE / template).
+#
+# Copy this to your source repo as `pkg/project.sh`, then customize.
+# Every field documented as "REQUIRED" must be set; "OPTIONAL" fields
+# may be left unset (defaults apply) or deleted entirely.
+#
+# This file is sourced by `pkg/build.sh` BEFORE `pkg/lib/framework.sh`,
+# so it must only declare data and (optionally) hook functions. Do not
+# perform side effects at top level.
+
+# =========================================================================
+# REQUIRED scalars
+# =========================================================================
+
+# Canonical package name. Lowercase alnum + hyphen, debian-naming rules.
+PKG_NAME=myproject
+
+# Env-var prefix for project-scoped framework inputs. Uppercase + _.
+# The framework reads ${PKG_PREFIX}_MANIFEST_COMMIT to embed the source
+# commit in the manifest sidecar. Convention: same as PKG_NAME upcased.
+PKG_PREFIX=MYPROJECT
+
+# One-line description (rpm summary, deb first synopsis line).
+PKG_SUMMARY="One-line description of the project"
+
+# Multi-line description (deb extended description, rpm %description).
+# Newlines preserved.
+PKG_DESCRIPTION="Multi-line description.
+First paragraph wrapped to a reasonable width.
+
+Second paragraph if needed."
+
+# Vendor string for fpm. Usually the publishing org name.
+PKG_VENDOR="Lou's Clues Labs"
+
+# Maintainer contact (deb Maintainer field, debian copyright contact).
+# Format: "Name <email>".
+PKG_MAINTAINER="Lou Junior <pkg@lousclues.com>"
+
+# Project homepage (deb URL field).
+PKG_HOMEPAGE_URL="https://example.com/myproject"
+
+# Source repository URL (debian copyright Source field).
+PKG_SOURCE_URL="https://github.com/lousclues-labs/myproject"
+
+# SPDX license expression for fpm --license.
+PKG_LICENSE_SPDX="GPL-3.0-only"
+
+# Human-readable license name for the debian copyright header.
+PKG_LICENSE_NAME="GPL-3.0-only"
+
+# Copyright holders (debian copyright Files: * stanza).
+PKG_COPYRIGHT_HOLDERS="Lou's Clues Labs"
+
+# Copyright year(s). Single year or range, e.g. "2024-2025".
+PKG_COPYRIGHT_YEAR="2025"
+
+# =========================================================================
+# REQUIRED arrays
+# =========================================================================
+
+# Cargo binary names to build (--bin <name>) and install to /usr/bin/.
+PKG_BINARIES=(myproject)
+
+# debian Depends entries. Each element is one dependency expression.
+# Use full debian syntax including version qualifiers.
+PKG_DEB_DEPENDS=(
+    "libc6 (>= 2.28)"
+)
+
+# =========================================================================
+# OPTIONAL arrays
+# =========================================================================
+
+# rpm Requires entries. If unset/empty, the framework derives them from
+# PKG_DEB_DEPENDS by stripping version qualifiers. Set explicitly when
+# the rpm requires differ (different package names on RH-family).
+# PKG_RPM_REQUIRES=(glibc)
+
+# Staged-tree assertions. "path:mode" tuples, path relative to install
+# root. Both the framework's pre-fpm validate_stage AND the post-install
+# layout-check.sh in CI walk this array.
+PKG_LAYOUT_CHECKS=(
+    "usr/bin/myproject:755"
+    "usr/share/doc/myproject:755"
+)
+
+# systemd units to stage from <repo>/systemd/. Installed to
+# /lib/systemd/system/. daemon-reload is run in postinst automatically
+# when this array is non-empty.
+# PKG_SYSTEMD_UNITS=(myproject.service myproject.timer)
+
+# debian-only Conflicts/Replaces (legacy package transitions).
+# PKG_DEB_CONFLICTS=(myproject-old)
+# PKG_DEB_REPLACES=(myproject-old)
+
+# rpm Conflicts.
+# PKG_RPM_CONFLICTS=(myproject-old)
+
+# Extra files to ship under /usr/share/doc/$PKG_NAME/. Paths relative
+# to the repo root.
+# PKG_EXTRA_DOC_FILES=(SECURITY.md THIRD_PARTY_NOTICES.md)
+
+# Mark these staged paths as debian conffiles (apt prompts on change).
+# Paths relative to install root, leading slash optional.
+# PKG_DEB_CONFIG_FILES=("/etc/myproject/myproject.conf")
+
+# Extra apt/dnf packages installed BEFORE fpm runs (build-time only).
+# PKG_EXTRA_DEB_BUILD_DEPS=(libssl-dev)
+# PKG_EXTRA_RPM_BUILD_DEPS=(openssl-devel)
+
+# =========================================================================
+# OPTIONAL scalars
+# =========================================================================
+
+# Framework version pin. `pkg-framework sync` writes this; mismatches
+# at runtime are a hard error.
+FRAMEWORK_VERSION=1.0.0
+
+# fpm version pin. Override if the project needs a specific fpm.
+# FPM_VERSION=1.16.0
+
+# Reproducibility epoch. Override to lock a specific build timestamp.
+# SOURCE_DATE_EPOCH_DEFAULT=1700000000
+
+# debian Section / Priority + rpm Group.
+# PKG_DEB_SECTION=net
+# PKG_DEB_PRIORITY=optional
+# PKG_RPM_GROUP=Applications/System
+
+# Cargo features. If set, build runs with --no-default-features
+# --features "$PKG_CARGO_FEATURES".
+# PKG_CARGO_FEATURES="feature-a feature-b"
+
+# =========================================================================
+# OPTIONAL hooks
+#
+# All hooks are bash functions. The framework calls each only if defined
+# (`declare -F`). Hooks may rely on REPO_ROOT, STAGE, DEB_OUT, RPM_OUT,
+# DISTRO, VERSION, OUTDIR, and any PKG_* variable declared above.
+# =========================================================================
+
+# Called BEFORE apt-get install. Use to add apt repos, etc.
+# project_pre_install_deb_deps() {
+#     :
+# }
+
+# Called AFTER apt-get install. Use for post-dep setup.
+# project_post_install_deb_deps() {
+#     :
+# }
+
+# Called BEFORE dnf install (rpm-side equivalents).
+# project_pre_install_rpm_deps() { :; }
+# project_post_install_rpm_deps() { :; }
+
+# Called BEFORE cargo build. Use to generate sources, fetch vendored
+# deps, etc.
+# project_pre_build() {
+#     :
+# }
+
+# Called AFTER cargo build. Use to invoke the just-built binary to
+# generate man pages, shell completions, etc.
+# project_post_build() {
+#     :
+#     # example: generate man pages from --help
+#     # "$CARGO_TARGET_DIR/release/myproject" gen-manpage > "$STAGE/myproject.1"
+# }
+
+# Called from _pkg_stage_assets with the staging root as $1. Use to
+# install configs, polkit policies, sudoers files, apt/dnf hooks, etc.
+# Most projects implement this.
+project_stage_extra() {
+    local root=$1
+    # example:
+    # install -D -m 0644 "$REPO_ROOT/config/myproject.conf" \
+    #     "$root/etc/myproject/myproject.conf"
+    :
+}
+
+# Body of the deb/rpm postinst. The framework wraps this with
+# `#!/bin/sh`, `set -e`, and a trailing `exit 0`. Output to stdout.
+# project_postinst_body() {
+#     cat <<'EOF'
+# # example: chown a state dir
+# install -d -o myproject -g myproject -m 0750 /var/lib/myproject
+# EOF
+# }
+
+# Body of the deb prerm / postrm. Same wrapping rules.
+# project_prerm_body() { :; }
+# project_postrm_body() { :; }
+
+# Extra fpm args for deb / rpm (one per line). Use sparingly; most
+# customization should flow through the PKG_* fields above.
+# project_fpm_deb_extra_args() {
+#     printf -- '--deb-recommends\n%s\n' 'tor'
+# }
+# project_fpm_rpm_extra_args() {
+#     :
+# }
+
+# Additional pre-fpm stage validation. Return non-zero to abort. The
+# PKG_LAYOUT_CHECKS array covers path+mode assertions; use this hook
+# for things that can't be expressed as path:mode.
+# project_validate_stage_extra() {
+#     local root=$1
+#     :
+# }
+
+# Additional post-install layout check (runs in CI inside the installed
+# distro container). Use for setcap, getent, runtime smoke, etc.
+# project_install_layout_check_extra() {
+#     # example: verify the binary actually runs and prints --version
+#     /usr/bin/myproject --version >/dev/null || return 1
+# }
