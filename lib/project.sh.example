@@ -120,6 +120,27 @@ PKG_LAYOUT_CHECKS=(
 # at runtime are a hard error.
 FRAMEWORK_VERSION=1.0.0
 
+# Hermetic cargo build (v1.2.2+). When set to 1, the framework runs
+# `cargo fetch --locked` first and then `cargo build --release
+# --frozen --offline`. The compile step cannot touch the network.
+# Useful for reproducibility audits and sandboxed CI. Defaults off
+# to preserve v1.2.x backward compatibility.
+# PKG_CARGO_OFFLINE=1
+
+# Optional artifact-name suffix (v1.2.2+). The default deb filename
+# is `${PKG_NAME}_${VERSION}_amd64.deb`. Set PKG_DEB_ARTIFACT_SUFFIX
+# to inject a distro tag so per-distro builds can land in the same
+# OUTDIR without colliding:
+#   PKG_DEB_ARTIFACT_SUFFIX="-${DISTRO_TAG}"
+# producing e.g. `myproject_1.0.0-noble_amd64.deb`. Default unset.
+# PKG_DEB_ARTIFACT_SUFFIX=""
+
+# Optional rpm Release/iteration (v1.2.2+). Defaults to 1. Set to a
+# distro-tagged value so per-distro rpms don't collide:
+#   PKG_RPM_RELEASE="1.fedora40"
+# producing e.g. `myproject-1.0.0-1.fedora40.x86_64.rpm`.
+# PKG_RPM_RELEASE="1"
+
 # fpm version pin. Override if the project needs a specific fpm.
 # FPM_VERSION=1.16.0
 

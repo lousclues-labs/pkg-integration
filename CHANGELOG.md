@@ -9,6 +9,135 @@ major number.
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-05-23
+
+Real-consumer fixes after vigil's first adoption. vigil hit ten
+distinct bugs that only surface in a project with two binaries,
+multi-line descriptions, docs, man pages, systemd units, and a real
+fpm build path. vigil patched its vendored copy locally to unblock
+CI; this release upstreams the fixes so vigil can `pkg-framework
+sync --bump` and drop the drift. Every fix has a regression test
+that would have caught the original bug.
+
+### Fixed
+
+- **CLI symlink resolution.** `bin/pkg-framework` derived its home
+  from `${BASH_SOURCE[0]}` without resolving the symlink that
+  `install.sh` creates. `~/.local/bin/pkg-framework version` failed
+  with "framework VERSION not found at ~/.local/VERSION". Now uses
+  `readlink -f` (with python3 / perl fallbacks for BSD readlink).
+  Pinned by smoke step 6.
+- **Workflow shell.** `lib/pkg-build.yml.tmpl` uses `source` in
+  container jobs; debian/ubuntu containers default `run:` to dash,
+  where `source` exits 127. Added workflow-level
+  `defaults.run.shell: bash`. Pinned by a unit test that asserts
+  either the default exists or no `source` remains.
+- **Multi-line `PKG_DESCRIPTION` corrupted fpm args.**
+  `_pkg_fpm_common_args` returned newline-delimited stdout that the
+  caller split on lines into a bash array. A description with
+  literal newlines spilled its second paragraph onto fpm's command
+  line as a positional path, with the symptom "Cannot package the
+  path '/tmp/.../monitor. One operator...'". `_pkg_fpm_common_args`
+  now writes directly into a caller-supplied array via bash
+  nameref. Multi-line descriptions land intact in both deb and rpm
+  metadata; docs already promised this and now actually deliver.
+- **fpm stdout pollution corrupted captured artifact path.**
+  `_pkg_fpm_deb` and `_pkg_fpm_rpm` write `printf '%s' "$out_file"`
+  as the return channel, but `section`/`log`/`run` also wrote to
+  stdout. `artifact=$(_pkg_fpm_deb)` captured the entire build log
+  followed by the path; `_pkg_validate_artifact` then complained
+  the artifact was missing. `log`, `section`, and `run` now write
+  to stderr globally; stdout is reserved for return values.
+- **`_pkg_validate_artifact` SIGPIPE on > 20 entries.**
+  `run dpkg-deb -c "$artifact" | head -20` and the rpm equivalent
+  trip SIGPIPE on the producer when `head` exits early. Under
+  `set -o pipefail` that fails the build for a valid artifact.
+  Capture the full listing into a variable, then head from it.
+- **Slim debian/ubuntu/fedora containers drop docs and man pages
+  at install time.** The install-test job in `pkg-build.yml.tmpl`
+  now removes `/etc/dpkg/dpkg.cfg.d/excludes` (and the
+  `dpkg.cfg.d/docker` variant) before `apt-get install`, and
+  strips `tsflags=nodocs` from `/etc/dnf/dnf.conf` before
+  `dnf install`. The installed layout now matches the packaged
+  layout, and `layout-check.sh` stops false-flagging.
+- **`layout-check.sh` grep slash escapes** caused
+  `grep: warning: stray \ before /` on Fedora. Removed the
+  unnecessary backslashes from
+  `'^ExecStart=.*(/home/|/tmp/|target/release/)'`.
+- **Debian copyright pointed at `changelog.gz` for the license
+  body**, which was wrong. `_pkg_emit_debian_copyright` now emits a
+  machine-readable copyright file per
+  `https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/`.
+  GPL-2/3 and LGPL-3 and Apache-2.0 point at the matching
+  `/usr/share/common-licenses/` body. Other licenses inline the
+  text from `$REPO_ROOT/LICENSE` when available, or fall back to a
+  source-URL pointer. vigil can now remove its `project_stage_extra`
+  override after sync.
+
+### Added
+
+- **`PKG_CARGO_OFFLINE`** (optional, default off). When set to
+  `1`, the framework runs `cargo fetch --locked` first and builds
+  with `--frozen --offline`. The compile step cannot touch the
+  network. Useful for reproducibility audits and sandboxed CI.
+- **`PKG_DEB_ARTIFACT_SUFFIX`** (optional). Inserted between
+  `${VERSION}` and `_amd64.deb` in the artifact filename. Produces
+  e.g. `vigil-baseline_1.12.1-noble_amd64.deb` so per-distro
+  builds in one OUTDIR do not collide. Defaults preserve v1.2.1
+  filenames.
+- **`PKG_RPM_RELEASE`** (optional, default `1`). Maps to fpm
+  `--iteration` and to the `N` in
+  `${PKG_NAME}-${VERSION}-N.x86_64.rpm`. Set to `1.fedora40` to
+  tag per-distro rpms.
+- **`tests/unit/test_v1_2_2_findings.sh`**. 15+ assertions tying
+  each finding back to a regression test (multi-line
+  PKG_DESCRIPTION via nameref, copyright format correctness,
+  log/section/run write to stderr, layout-check slashes, workflow
+  bash default + doc-exclude clearing, CLI readlink -f, cargo
+  offline knob present, suffix/release knobs present).
+- **`tests/smoke/test_e2e_package_build.sh`**. 9 checks across 6
+  steps. Shims fpm, exercises the real `_pkg_fpm_deb`,
+  `_pkg_fpm_rpm`, `_pkg_validate_artifact`, manifest emission, and
+  the CLI symlink path. Would have caught every vigil bug above.
+  `make smoke` runs both smoke files.
+
+### Changed
+
+- **Every `uses:` action in the workflow template
+  (`lib/pkg-build.yml.tmpl`) is now pinned to a sha** with the
+  human tag in a trailing comment. The framework's own workflows
+  were pinned in v1.2.1; the template that consumers vendor was
+  the missing piece. After `pkg-framework sync`, every consumer
+  inherits the pins automatically.
+- `lib/project.sh.example` documents the three new knobs.
+- `docs/customization-surface.md` documents the new knobs and
+  pins the multi-line `PKG_DESCRIPTION` guarantee.
+- `docs/troubleshooting.md` gains four new entries (#8 multi-line
+  description corruption, #9 SIGPIPE on validate, #10 install-time
+  doc stripping, #11 CLI through symlink). Each tells the operator
+  exactly which version fixed it and what to do.
+
+### Tracked follow-ups (not in this PR)
+
+- `actions/attest-build-provenance` (still waiting on a verified
+  sha pin for that action).
+- Reproducible-build cross-verifier: a second matrix run that
+  rebuilds the release tarball and compares sha256 against the
+  attached sidecar.
+
+### Migration
+
+vigil and any other consumer pinned to `<= v1.2.1`:
+
+```sh
+pkg-framework upgrade   # sync --bump to v1.2.2
+pkg-framework verify    # confirm clean
+```
+
+After sync, vigil can remove its local drift patches in
+`pkg/lib/framework.sh` and `.github/workflows/pkg-build.yml`, and
+drop the `project_stage_extra` override for `debian/copyright`.
+
 ## [1.2.1] - 2026-05-23
 
 Supply-chain hardening. No new operator-facing features; this is

@@ -94,6 +94,51 @@ consumer (lousclues-pkg's `pkg-signing`, vigil's CI) reports
 - Nothing in `project_stage_extra` writes to the manifest path. The
   framework owns that sidecar; project hooks must not touch it.
 
+## 8. fpm reports `Cannot package the path '...'` with multi-line description
+
+Pre-v1.2.2 the framework passed common fpm args through a
+newline-delimited string; a `PKG_DESCRIPTION` with literal newlines
+spilled the second paragraph onto the fpm command line as a
+positional path. Symptom:
+
+```
+Invalid package configuration: Cannot package the path
+'/tmp/.../Second paragraph...', does it exist?
+```
+
+Fix: upgrade to v1.2.2+ and re-run `pkg-framework sync`. Multi-line
+descriptions now survive intact into both deb and rpm metadata.
+
+## 9. Build fails with `Broken pipe` on `dpkg-deb -c | head -20`
+
+Pre-v1.2.2 the post-build validation piped the full listing through
+`head -20`. Under `set -o pipefail`, packages with more than 20
+entries trip a SIGPIPE on the producer and fail the whole build for
+a perfectly valid artifact. Fix: upgrade to v1.2.2+.
+
+## 10. Install-test in CI reports `/usr/share/doc/<name>/ missing`
+
+Slim debian/ubuntu and minimal fedora base images drop docs and
+man pages at install time:
+
+- `/etc/dpkg/dpkg.cfg.d/excludes` strips `/usr/share/doc/*` and
+  `/usr/share/man/*`.
+- `/etc/dnf/dnf.conf` may have `tsflags=nodocs`.
+
+v1.2.2 of the vendored `.github/workflows/pkg-build.yml` clears
+both before installing the artifact, so the installed layout
+matches the packaged layout. If you are still drifting after
+upgrade, run `pkg-framework sync` and commit the result.
+
+## 11. `pkg-framework version` fails through the installer symlink
+
+Symptom: `~/.local/bin/pkg-framework version` exits with
+`framework VERSION not found at .../local/VERSION`. Cause:
+pre-v1.2.2 the CLI derived its home from `${BASH_SOURCE[0]}`
+without resolving the symlink, landing at `~/.local` instead of
+`~/.local/share/pkg-framework`. Fix: v1.2.2+ resolves the symlink
+chain via `readlink -f` first.
+
 ## Getting help
 
 If none of the above fits, file an issue on

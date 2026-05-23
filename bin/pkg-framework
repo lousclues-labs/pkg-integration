@@ -19,7 +19,27 @@
 
 set -euo pipefail
 
-CLI_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# v1.2.2: resolve through symlinks. install.sh symlinks the cli into
+# ~/.local/bin/pkg-framework -> ~/.local/share/pkg-framework/bin/pkg-framework.
+# Without readlink -f the relative `../` derivation lands at
+# ~/.local instead of the framework home, and `version`/`doctor`
+# cannot find VERSION. readlink -f follows the chain; if it fails
+# (BSD readlink lacks -f), fall back to a python or perl resolver,
+# and finally to the unresolved path.
+_resolve_real_path() {
+    local p=$1
+    if command -v readlink >/dev/null 2>&1 && readlink -f -- "$p" >/dev/null 2>&1; then
+        readlink -f -- "$p"
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$p"
+    elif command -v perl >/dev/null 2>&1; then
+        perl -MCwd=abs_path -E 'say abs_path($ARGV[0])' "$p"
+    else
+        printf '%s' "$p"
+    fi
+}
+_CLI_REAL_PATH="$(_resolve_real_path "${BASH_SOURCE[0]}")"
+CLI_DIR="$(cd -- "$(dirname -- "$_CLI_REAL_PATH")" && pwd)"
 DEFAULT_FRAMEWORK_HOME="$(cd -- "$CLI_DIR/.." && pwd)"
 FRAMEWORK_HOME="${PKG_FRAMEWORK_HOME:-$DEFAULT_FRAMEWORK_HOME}"
 TARGET=""

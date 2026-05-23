@@ -47,8 +47,11 @@ doctor: ## environment preflight
 test: ## run the unit suite
 	@./tests/run_tests.sh
 
-smoke: ## end-to-end onboarding round trip (scaffold -> verify -> drift -> sync)
-	@./tests/smoke/test_onboard_new_project.sh
+smoke: ## end-to-end smoke (onboarding + package build)
+	@for t in $(sort $(wildcard tests/smoke/test_*.sh)); do \
+		printf '\n=== %s ===\n' "$$t"; \
+		bash "$$t" || exit 1; \
+	done
 
 lint: lint-shell lint-voice lint-docs ## all linters
 

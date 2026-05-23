@@ -16,7 +16,7 @@ will catch it. Add a hook or open a framework PR instead.
 | `PKG_NAME` | string | Lowercase alnum + hyphen. Debian package-name rules. |
 | `PKG_PREFIX` | string | Uppercase alnum + underscore. Used for `${PREFIX}_MANIFEST_COMMIT` env var. |
 | `PKG_SUMMARY` | string | One-line description. Maps to rpm `Summary:` and deb first synopsis line. |
-| `PKG_DESCRIPTION` | string | Multi-line description (newlines preserved). |
+| `PKG_DESCRIPTION` | string | Multi-line description (newlines preserved). The framework passes this to fpm as a single `--description` argument; multi-paragraph descriptions land intact in both deb and rpm metadata. v1.2.2+ pins this guarantee with a regression test. |
 | `PKG_VENDOR` | string | fpm `--vendor`. |
 | `PKG_MAINTAINER` | `Name <email>` | deb `Maintainer:` and debian/copyright `Upstream-Contact`. |
 | `PKG_HOMEPAGE_URL` | URL | deb `URL:`. |
@@ -44,6 +44,9 @@ will catch it. Add a hook or open a framework PR instead.
 | `PKG_DEB_PRIORITY` | `optional` | debian Priority. |
 | `PKG_RPM_GROUP` | `Applications/System` | rpm Group. |
 | `PKG_CARGO_FEATURES` | unset | If set, build uses `--no-default-features --features "$PKG_CARGO_FEATURES"`. |
+| `PKG_CARGO_OFFLINE` | `0` | v1.2.2+. When `1`, the framework runs `cargo fetch --locked` first and then builds with `--frozen --offline`. Useful for hermetic / reproducibility audits. |
+| `PKG_DEB_ARTIFACT_SUFFIX` | unset | v1.2.2+. Injected between `${VERSION}` and `_amd64.deb` in the artifact filename so per-distro builds in one OUTDIR do not collide. Example: `-noble` produces `myproject_1.0.0-noble_amd64.deb`. |
+| `PKG_RPM_RELEASE` | `1` | v1.2.2+. fpm `--iteration` (rpm `Release:`) and the `N` in `${PKG_NAME}-${VERSION}-N.x86_64.rpm`. Set to a distro-tagged value (`1.fedora40`) when building multiple rpm variants into one OUTDIR. |
 
 ## Optional arrays
 

@@ -82,14 +82,20 @@ _pkg_check_framework_version() {
 # -------------------------------------------------------------------------
 # Section 2 -- Helpers (logging, exec, retry, file install)
 # -------------------------------------------------------------------------
-log() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
+# v1.2.2: log/section/run write to stderr globally. The framework
+# uses these for human progress chatter; the previous shape mixed
+# them with command stdout, and any helper that did `x=$(_pkg_foo)`
+# captured the chatter into x. _pkg_fpm_deb / _pkg_fpm_rpm were the
+# most painful instance (the artifact path got buried in the build
+# log). Stdout is now reserved for machine-readable return values.
+log() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*" >&2; }
 
 section() {
-    printf '\n=== %s ===\n' "$*"
+    printf '\n=== %s ===\n' "$*" >&2
 }
 
 run() {
-    printf '$ %s\n' "$*"
+    printf '$ %s\n' "$*" >&2
     "$@"
 }
 
@@ -427,6 +433,16 @@ _pkg_build_binaries() {
         build_args+=(--no-default-features --features "$PKG_CARGO_FEATURES")
     fi
 
+    # v1.2.2: optional hermetic build. With PKG_CARGO_OFFLINE=1, we
+    # pre-fetch deps with --locked, then compile with --frozen
+    # --offline so the build step cannot touch the network. Useful
+    # for reproducibility audits and for sandboxed CI. Default off
+    # to preserve v1.2.x backward compatibility.
+    if [[ "${PKG_CARGO_OFFLINE:-0}" == "1" ]]; then
+        run cargo fetch --locked
+        build_args+=(--frozen --offline)
+    fi
+
     for bin in "${PKG_BINARIES[@]}"; do
         run cargo build "${build_args[@]}" --bin "$bin"
     done
@@ -526,6 +542,37 @@ _pkg_stage_assets() {
 # Section 9 -- debian/copyright (machine-readable format 1.0)
 # -------------------------------------------------------------------------
 _pkg_emit_debian_copyright() {
+    # v1.2.2: emit a real debian copyright file. The previous shape
+    # pointed the license body at changelog.gz, which was wrong.
+    # For GPL-3.0-only we reference the common-licenses path that
+    # ships in every debian/ubuntu base. For other licenses we
+    # inline the LICENSE file body when it is present in REPO_ROOT;
+    # otherwise we point at the source URL.
+    local license_block=""
+    case "$PKG_LICENSE_SPDX" in
+        GPL-3.0-only|GPL-3.0+|GPL-3)
+            license_block=$'On Debian systems, the complete text of the GNU\n General Public License version 3 can be found in\n /usr/share/common-licenses/GPL-3.'
+            ;;
+        GPL-2.0-only|GPL-2.0+|GPL-2)
+            license_block=$'On Debian systems, the complete text of the GNU\n General Public License version 2 can be found in\n /usr/share/common-licenses/GPL-2.'
+            ;;
+        LGPL-3.0-only|LGPL-3.0+)
+            license_block=$'On Debian systems, the complete text of the GNU\n Lesser General Public License version 3 can be found in\n /usr/share/common-licenses/LGPL-3.'
+            ;;
+        Apache-2.0)
+            license_block=$'On Debian systems, the complete text of the\n Apache License version 2.0 can be found in\n /usr/share/common-licenses/Apache-2.0.'
+            ;;
+        *)
+            if [[ -r "${REPO_ROOT:-}/LICENSE" ]]; then
+                # Indent each line of LICENSE with a single space per
+                # debian copyright format. Blank lines become ".".
+                license_block=$(sed -e 's/^$/./' -e 's/^/ /' "${REPO_ROOT}/LICENSE")
+            else
+                license_block=" The full text of the $PKG_LICENSE_NAME license is available at"$'\n'" $PKG_SOURCE_URL."
+            fi
+            ;;
+    esac
+
     cat <<EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: $PKG_NAME
@@ -534,12 +581,10 @@ Source: $PKG_SOURCE_URL
 
 Files: *
 Copyright: $PKG_COPYRIGHT_YEAR $PKG_COPYRIGHT_HOLDERS
-License: $PKG_LICENSE_NAME
+License: $PKG_LICENSE_SPDX
 
-License: $PKG_LICENSE_NAME
- The full text of the $PKG_LICENSE_NAME license is shipped with this
- package at /usr/share/doc/$PKG_NAME/changelog.gz alongside the upstream
- source. See $PKG_SOURCE_URL for the canonical copy.
+License: $PKG_LICENSE_SPDX
+$license_block
 EOF
 }
 
@@ -608,16 +653,23 @@ _pkg_emit_postrm() {
 # -------------------------------------------------------------------------
 # Section 11 -- fpm invocations
 # -------------------------------------------------------------------------
+# v1.2.2: build common fpm args into a caller-provided array name
+# (bash nameref) instead of returning newline-delimited stdout. The
+# old shape corrupted PKG_DESCRIPTION when it contained literal
+# newlines (each line after the first became a positional fpm path).
+# Docs promise multi-line descriptions; this is what makes them work.
 _pkg_fpm_common_args() {
-    # Args shared between deb and rpm fpm invocations.
-    printf -- '--name\n%s\n' "$PKG_NAME"
-    printf -- '--version\n%s\n' "$VERSION"
-    printf -- '--vendor\n%s\n' "$PKG_VENDOR"
-    printf -- '--maintainer\n%s\n' "$PKG_MAINTAINER"
-    printf -- '--url\n%s\n' "$PKG_HOMEPAGE_URL"
-    printf -- '--license\n%s\n' "$PKG_LICENSE_SPDX"
-    printf -- '--description\n%s\n' "$PKG_DESCRIPTION"
-    printf -- '--architecture\nnative\n'
+    local -n _out=$1
+    _out+=(
+        --name        "$PKG_NAME"
+        --version     "$VERSION"
+        --vendor      "$PKG_VENDOR"
+        --maintainer  "$PKG_MAINTAINER"
+        --url         "$PKG_HOMEPAGE_URL"
+        --license     "$PKG_LICENSE_SPDX"
+        --description "$PKG_DESCRIPTION"
+        --architecture native
+    )
 }
 
 _pkg_fpm_deb() {
@@ -630,7 +682,7 @@ _pkg_fpm_deb() {
     _pkg_emit_prerm "$prerm"
     _pkg_emit_postrm "$postrm"
 
-    local out_file="$OUTDIR/${PKG_NAME}_${VERSION}_amd64.deb"
+    local out_file="$OUTDIR/${PKG_NAME}_${VERSION}${PKG_DEB_ARTIFACT_SUFFIX:-}_amd64.deb"
     rm -f "$out_file"
 
     # Build args list.
@@ -679,14 +731,10 @@ _pkg_fpm_deb() {
         done
     fi
 
-    # Common args.
-    local common
-    common="$(_pkg_fpm_common_args)"
-    # shellcheck disable=SC2206
+    # Common args. v1.2.2: fill via nameref so multi-line
+    # PKG_DESCRIPTION survives intact.
     local common_arr=()
-    while IFS= read -r line; do
-        common_arr+=("$line")
-    done <<< "$common"
+    _pkg_fpm_common_args common_arr
 
     # Project-supplied extras.
     if declare -F project_fpm_deb_extra_args >/dev/null; then
@@ -712,7 +760,8 @@ _pkg_fpm_rpm() {
     _pkg_emit_prerm "$prerm"
     _pkg_emit_postrm "$postrm"
 
-    local out_file="$OUTDIR/${PKG_NAME}-${VERSION}-1.x86_64.rpm"
+    local rpm_release="${PKG_RPM_RELEASE:-1}"
+    local out_file="$OUTDIR/${PKG_NAME}-${VERSION}-${rpm_release}.x86_64.rpm"
     rm -f "$out_file"
 
     local args=(
@@ -724,6 +773,7 @@ _pkg_fpm_rpm() {
         --category "$PKG_RPM_GROUP"
         --chdir "$RPM_OUT"
         --package "$out_file"
+        --iteration "$rpm_release"
         --after-install "$postinst"
     )
 
@@ -760,12 +810,8 @@ _pkg_fpm_rpm() {
         done
     fi
 
-    local common
-    common="$(_pkg_fpm_common_args)"
     local common_arr=()
-    while IFS= read -r line; do
-        common_arr+=("$line")
-    done <<< "$common"
+    _pkg_fpm_common_args common_arr
 
     if declare -F project_fpm_rpm_extra_args >/dev/null; then
         local extra
@@ -877,11 +923,20 @@ _pkg_validate_artifact() {
     case "$artifact" in
         *.deb)
             run dpkg-deb -I "$artifact"
-            run dpkg-deb -c "$artifact" | head -20
+            # v1.2.2: capture the full listing into a variable, then
+            # head from it. Piping `dpkg-deb -c | head -20` SIGPIPEs
+            # the producer when the package has more than 20 entries;
+            # under set -o pipefail that fails the build for a
+            # perfectly valid artifact.
+            local listing
+            listing=$(dpkg-deb -c "$artifact")
+            printf '%s\n' "$listing" | head -20 >&2
             ;;
         *.rpm)
             run rpm -qpi "$artifact"
-            run rpm -qpl "$artifact" | head -20
+            local listing
+            listing=$(rpm -qpl "$artifact")
+            printf '%s\n' "$listing" | head -20 >&2
             ;;
     esac
 }
