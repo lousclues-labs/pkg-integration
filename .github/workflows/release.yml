@@ -26,7 +26,11 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Pin every third-party action to a SHA. Floating tags would
+      # let a re-tagged action silently change what gets attached to
+      # a release that downstream consumers (vigil's CI included)
+      # treat as a trust root. Two extra lines, real hardening.
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.7
         with:
           fetch-depth: 0
 
@@ -75,26 +79,33 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -eu
-          # Use stateful awk to pull from "## [VERSION]" up to the next "## [" line.
-          # (Range expressions are unreliable when the end marker can match the start.)
+          # Stateful awk: from "## [VERSION]" up to the next "## [" line.
+          # (Range expressions are unreliable when the end marker can
+          # match the start.)
           awk -v v="$VERSION" '
               $0 ~ "^## \\["v"\\]" { f=1; print; next }
               f && /^## \[/        { exit }
               f                    { print }
           ' CHANGELOG.md > /tmp/notes.md
+          # v1.2.1: fail loud if the section is missing. A missing
+          # section means someone tagged a release without writing
+          # release notes for it; that is a release-prep bug and
+          # should block, not silently fall back to the full file.
           if [ ! -s /tmp/notes.md ]; then
-              printf 'no CHANGELOG section for %s; falling back to full file\n' "$VERSION" >&2
-              cp CHANGELOG.md /tmp/notes.md
+              printf 'release: no CHANGELOG section for %s; add one and re-tag\n' "$VERSION" >&2
+              printf 'expected a `## [%s]` heading in CHANGELOG.md\n' "$VERSION" >&2
+              exit 1
           fi
           printf '%s\n' "tarball: ${{ steps.pack.outputs.tarball }}" >> /tmp/notes.md
           printf '%s\n' "sha256:  ${{ steps.pack.outputs.sha256 }}" >> /tmp/notes.md
 
       - name: publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: pkg-framework ${{ steps.meta.outputs.tag }}
           body_path: /tmp/notes.md
+          make_latest: true
           files: |
             ${{ steps.pack.outputs.tarball }}
             ${{ steps.pack.outputs.tarball }}.sha256

@@ -9,6 +9,63 @@ major number.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-05-23
+
+Supply-chain hardening. No new operator-facing features; this is
+the patch that makes the framework worthy of being a build trust
+root for vigil and other consumers.
+
+### Changed
+
+- Every `uses:` line in `.github/workflows/ci.yml` and
+  `.github/workflows/release.yml` is now pinned to a sha with the
+  human tag in a trailing comment. Floating tags
+  (`actions/checkout@v4`, `softprops/action-gh-release@v2`) are
+  gone. Re-tagged releases of those actions can no longer change
+  what runs in our pipelines without a CODEOWNER review of the new
+  sha.
+- `install.sh` defaults to the latest published release tag (via
+  `git ls-remote --tags --sort=-v:refname`), not `main`. A
+  curl-piped installer that defaulted to a moving branch was the
+  textbook supply-chain footgun this fix closes. `main` remains
+  reachable via `PKG_FRAMEWORK_REF=main` but the installer prints
+  a loud "NOT recommended" line when it falls back.
+- `install.sh` verifies the published `sha256` sidecar against the
+  downloaded tarball before extracting. Default behavior when the
+  ref is a release tag and `curl + sha256sum + tar` are all
+  present. Falls back to `git clone` when any of those are missing.
+  `PKG_FRAMEWORK_METHOD=tarball` makes verification mandatory and
+  refuses the fallback; `PKG_FRAMEWORK_METHOD=git` skips the
+  tarball path entirely.
+- `release.yml` extract-changelog step now fails the workflow when
+  the matching `## [VERSION]` section is absent. The pre-1.2.1
+  shape silently dumped the whole CHANGELOG into the release notes,
+  which papered over the release-prep bug of forgetting to write
+  notes for the release being tagged.
+- `release.yml` publish step gains `make_latest: true` so a v* tag
+  push deterministically updates the "Latest" badge regardless of
+  the action's default behavior.
+
+### Added
+
+- `SECURITY.md`. Disclosure contact, supported-versions matrix,
+  the supply-chain commitments (deterministic tarballs, sha256
+  sidecar, sha-pinned actions, latest-tag default in the
+  installer), and the known gaps (no build provenance yet, no
+  reproducible-build cross-verifier yet).
+- `.github/CODEOWNERS`. Single line, `* @lousclues`. Required
+  reviewer for every path; pairs with branch protection on `main`.
+
+### Tracked follow-ups (not in this PR)
+
+- Add `actions/attest-build-provenance` to `release.yml` for an
+  in-toto attestation that the tarball came from this workflow at
+  this commit. Pending verification of a stable sha for that
+  action.
+- Repo description + topics (`packaging`, `deb`, `rpm`,
+  `reproducible-builds`). Set via `gh repo edit`, not a file
+  change in this PR.
+
 ## [1.2.0] - 2026-05-23
 
 Tier 3 from the post-split plan. Reduces the onboarding loop from

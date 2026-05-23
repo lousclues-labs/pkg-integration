@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# pkg-framework CODEOWNERS.
+#
+# Every path in this repo requires review from an owner before merge.
+# Branch protection on `main` enforces this rule (configured at the
+# repo settings level).
+#
+# Single line on purpose: this is a small framework with one
+# maintainer. As contributors come on board, narrow the scopes here
+# rather than diluting the catch-all.
+
+* @lousclues
