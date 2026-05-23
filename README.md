@@ -3,7 +3,7 @@
 # pkg-framework
 
 Shared deb / rpm build pipeline for lousclues-labs Rust projects. The
-framework lives in `lousclues-pkg/pkg-framework/` as the source of
+framework lives at `lousclues-labs/pkg-integration` as the source of
 truth. Source repositories vendor it into `pkg/lib/` via the
 `pkg-framework` CLI, then declare a small manifest in `pkg/project.sh`.
 
@@ -31,7 +31,7 @@ What the source repo still owns:
 
 ```sh
 cd my-rust-project
-/path/to/lousclues-pkg/pkg-framework/bin/pkg-framework new my-rust-project
+/path/to/pkg-integration/bin/pkg-framework new my-rust-project
 $EDITOR pkg/project.sh    # fill in the manifest
 git add pkg/ .github/workflows/pkg-build.yml
 git commit -m 'pkg: adopt pkg-framework v1.0.0'
@@ -60,13 +60,13 @@ and tailor it:
 
 ```sh
 cd existing-project
-/path/to/pkg-framework/bin/pkg-framework new my-project       # scaffolds; abort if it refuses
+/path/to/pkg-integration/bin/pkg-framework new my-project       # scaffolds; abort if it refuses
 ```
 
 For projects already on a previous framework version:
 
 ```sh
-/path/to/pkg-framework/bin/pkg-framework sync --bump
+/path/to/pkg-integration/bin/pkg-framework sync --bump
 ```
 
 ## Subcommands
