@@ -64,6 +64,14 @@ framework_version() {
     tr -d '\r\n' < "$FRAMEWORK_HOME/VERSION"
 }
 
+# Read the FRAMEWORK_VERSION pin from a project.sh. Echoes empty
+# string if the pin is missing. Used by sync, verify, status.
+_pinned_framework_version() {
+    local proj=$1
+    [[ -r "$proj" ]] || return 0
+    awk -F= '/^FRAMEWORK_VERSION[[:space:]]*=/ {gsub(/[" ]/, "", $2); print $2; exit}' "$proj"
+}
+
 # -------------------------------------------------------------------------
 # Argument parsing (shared across subcommands)
 # -------------------------------------------------------------------------
@@ -201,7 +209,7 @@ cmd_sync() {
 
     # Detect pinned version in project.sh.
     local pinned
-    pinned=$(awk -F= '/^FRAMEWORK_VERSION[[:space:]]*=/ {gsub(/[" ]/, "", $2); print $2; exit}' "$proj")
+    pinned=$(_pinned_framework_version "$proj")
 
     if [[ -z "$pinned" ]]; then
         warn "no FRAMEWORK_VERSION pin in pkg/project.sh -- adding $fv"
@@ -285,7 +293,7 @@ cmd_verify() {
     local proj="$TARGET/pkg/project.sh"
     if [[ -r "$proj" ]]; then
         local pinned fv
-        pinned=$(awk -F= '/^FRAMEWORK_VERSION[[:space:]]*=/ {gsub(/[" ]/, "", $2); print $2; exit}' "$proj")
+        pinned=$(_pinned_framework_version "$proj")
         fv="$(framework_version)"
         if [[ -z "$pinned" ]]; then
             printf 'pkg-framework: pkg/project.sh has no FRAMEWORK_VERSION pin\n' >&2
@@ -307,6 +315,294 @@ cmd_verify() {
 }
 
 # -------------------------------------------------------------------------
+# Subcommand: doctor
+# -------------------------------------------------------------------------
+cmd_doctor() {
+    local rc=0
+    local b
+    printf 'pkg-framework doctor\n'
+    printf '  framework: %s\n' "$(framework_version)"
+    printf '  home:      %s\n' "$FRAMEWORK_HOME"
+    printf '\n'
+
+    # Required tools. Without these the framework cannot run.
+    local required=(bash sha256sum awk sed install grep find tr)
+    for b in "${required[@]}"; do
+        if command -v "$b" >/dev/null 2>&1; then
+            ok "$b ($(command -v "$b"))"
+        else
+            printf '  FAIL: %s not on PATH (required)\n' "$b" >&2
+            rc=1
+        fi
+    done
+
+    # Bash version. We need 4+ for mapfile / associative arrays.
+    local bash_major
+    bash_major=${BASH_VERSION%%.*}
+    if [[ "$bash_major" -ge 4 ]]; then
+        ok "bash $BASH_VERSION (>= 4)"
+    else
+        printf '  FAIL: bash %s; need 4 or newer\n' "$BASH_VERSION" >&2
+        rc=1
+    fi
+
+    printf '\n  optional (only needed at build time):\n'
+    local optional=(cargo fpm docker podman dnf apt-get)
+    for b in "${optional[@]}"; do
+        if command -v "$b" >/dev/null 2>&1; then
+            ok "$b ($(command -v "$b"))"
+        else
+            warn "$b not on PATH"
+        fi
+    done
+
+    printf '\n'
+    if [[ "$rc" -eq 0 ]]; then
+        printf 'doctor: ready\n'
+    else
+        printf 'doctor: missing required tools (install above and re-run)\n' >&2
+    fi
+    return "$rc"
+}
+
+# -------------------------------------------------------------------------
+# Subcommand: lint
+#
+# Validates pkg/project.sh against the manifest schema. No build, no
+# fpm, no network. Sub-second feedback during onboarding.
+# -------------------------------------------------------------------------
+cmd_lint() {
+    ensure_target
+    local proj="$TARGET/pkg/project.sh"
+    if [[ ! -r "$proj" ]]; then
+        die "$proj not found (run \`pkg-framework new <name>\` first)"
+    fi
+
+    # Source the manifest in a subshell so we do not pollute our env.
+    # `set -u` would trip on optional fields; we use `set +u` inside.
+    local lint_rc=0
+    local lint_out
+    lint_out=$(
+        set +u
+        # shellcheck disable=SC1090
+        source "$proj"
+        rc=0
+        _miss() { printf '  FAIL: %s is required but unset or empty\n' "$1"; rc=1; }
+        # Required scalars.
+        [[ -n "${PKG_NAME:-}" ]]              || _miss PKG_NAME
+        [[ -n "${PKG_PREFIX:-}" ]]            || _miss PKG_PREFIX
+        [[ -n "${PKG_SUMMARY:-}" ]]           || _miss PKG_SUMMARY
+        [[ -n "${PKG_DESCRIPTION:-}" ]]       || _miss PKG_DESCRIPTION
+        [[ -n "${PKG_VENDOR:-}" ]]            || _miss PKG_VENDOR
+        [[ -n "${PKG_MAINTAINER:-}" ]]        || _miss PKG_MAINTAINER
+        [[ -n "${PKG_HOMEPAGE_URL:-}" ]]      || _miss PKG_HOMEPAGE_URL
+        [[ -n "${PKG_SOURCE_URL:-}" ]]        || _miss PKG_SOURCE_URL
+        [[ -n "${PKG_LICENSE_SPDX:-}" ]]      || _miss PKG_LICENSE_SPDX
+        [[ -n "${PKG_LICENSE_NAME:-}" ]]      || _miss PKG_LICENSE_NAME
+        [[ -n "${PKG_COPYRIGHT_HOLDERS:-}" ]] || _miss PKG_COPYRIGHT_HOLDERS
+        [[ -n "${PKG_COPYRIGHT_YEAR:-}" ]]    || _miss PKG_COPYRIGHT_YEAR
+        [[ -n "${FRAMEWORK_VERSION:-}" ]]     || _miss FRAMEWORK_VERSION
+
+        # Required arrays. Bash test: declare -p exits 0 if defined.
+        if ! declare -p PKG_BINARIES >/dev/null 2>&1; then
+            printf '  FAIL: PKG_BINARIES must be an array\n'; rc=1
+        elif [[ "${#PKG_BINARIES[@]}" -eq 0 ]]; then
+            printf '  FAIL: PKG_BINARIES is empty\n'; rc=1
+        fi
+        if ! declare -p PKG_DEB_DEPENDS >/dev/null 2>&1; then
+            printf '  FAIL: PKG_DEB_DEPENDS must be an array (may be empty)\n'; rc=1
+        fi
+        if ! declare -p PKG_LAYOUT_CHECKS >/dev/null 2>&1; then
+            printf '  FAIL: PKG_LAYOUT_CHECKS must be an array\n'; rc=1
+        else
+            # Each entry is path:mode. Mode must be 3 or 4 octal digits.
+            local e
+            for e in "${PKG_LAYOUT_CHECKS[@]}"; do
+                if [[ ! "$e" =~ ^[^:]+:[0-7]{3,4}$ ]]; then
+                    printf '  FAIL: PKG_LAYOUT_CHECKS entry malformed: %s (expect path:NNN)\n' "$e"
+                    rc=1
+                fi
+            done
+        fi
+
+        # PKG_NAME must be debian-naming compliant.
+        if [[ -n "${PKG_NAME:-}" && ! "$PKG_NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+            printf '  FAIL: PKG_NAME=%s violates debian naming (lowercase alnum + hyphen)\n' "$PKG_NAME"
+            rc=1
+        fi
+        # PKG_PREFIX must be uppercase + underscore.
+        if [[ -n "${PKG_PREFIX:-}" && ! "$PKG_PREFIX" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
+            printf '  FAIL: PKG_PREFIX=%s must be uppercase + underscore\n' "$PKG_PREFIX"
+            rc=1
+        fi
+
+        exit "$rc"
+    )
+    lint_rc=$?
+    [[ -n "$lint_out" ]] && printf '%s\n' "$lint_out"
+    if [[ "$lint_rc" -eq 0 ]]; then
+        ok "manifest schema valid ($proj)"
+    fi
+    return "$lint_rc"
+}
+
+# -------------------------------------------------------------------------
+# Subcommand: dry-run
+#
+# Print what the framework would do, without invoking fpm. The output
+# is meant to be reviewer-friendly: a packaging change shows up as a
+# diff in the dry-run output across commits.
+# -------------------------------------------------------------------------
+cmd_dry_run() {
+    ensure_target
+    local proj="$TARGET/pkg/project.sh"
+    [[ -r "$proj" ]] || die "$proj not found (run \`pkg-framework new <name>\` first)"
+
+    (
+        set +u
+        # shellcheck disable=SC1090
+        source "$proj"
+        local fv
+        fv=$(framework_version)
+        printf 'pkg-framework dry-run\n'
+        printf '  framework:  %s\n' "$fv"
+        printf '  project:    %s\n' "${PKG_NAME:-?}"
+        printf '  prefix:     %s\n' "${PKG_PREFIX:-?}"
+        printf '  vendor:     %s\n' "${PKG_VENDOR:-?}"
+        printf '  maintainer: %s\n' "${PKG_MAINTAINER:-?}"
+        printf '  license:    %s\n' "${PKG_LICENSE_SPDX:-?}"
+        printf '\n'
+        printf '  binaries:\n'
+        local b
+        for b in "${PKG_BINARIES[@]:-}"; do
+            printf '    cargo build --release --bin %s\n' "$b"
+        done
+        printf '\n'
+        printf '  staging tree (PKG_LAYOUT_CHECKS):\n'
+        local e
+        for e in "${PKG_LAYOUT_CHECKS[@]:-}"; do
+            printf '    %s\n' "$e"
+        done
+        printf '\n'
+        printf '  deb depends:\n'
+        for e in "${PKG_DEB_DEPENDS[@]:-}"; do
+            printf '    Depends: %s\n' "$e"
+        done
+        printf '\n'
+        printf '  fpm invocations (resolved):\n'
+        printf '    fpm -s dir -t deb -n %s -v <VERSION> --license %q ...\n' \
+            "${PKG_NAME:-?}" "${PKG_LICENSE_SPDX:-?}"
+        printf '    fpm -s dir -t rpm -n %s -v <VERSION> --license %q ...\n' \
+            "${PKG_NAME:-?}" "${PKG_LICENSE_SPDX:-?}"
+        printf '\n'
+        printf '  hooks defined:\n'
+        local h
+        for h in project_stage_extra project_pre_build project_post_build \
+                 project_postinst_body project_prerm_body project_postrm_body \
+                 project_fpm_deb_extra_args project_fpm_rpm_extra_args \
+                 project_validate_stage_extra project_install_layout_check_extra; do
+            if declare -F "$h" >/dev/null 2>&1; then
+                printf '    %s (defined)\n' "$h"
+            fi
+        done
+        printf '\n'
+        printf 'dry-run: no commands executed; pass --target/--framework-path to retarget\n'
+    )
+}
+
+# -------------------------------------------------------------------------
+# Subcommand: status
+#
+# One-liner summary suitable for CI status checks and READMEs.
+# -------------------------------------------------------------------------
+cmd_status() {
+    ensure_target
+    local proj="$TARGET/pkg/project.sh"
+    local fv pinned drift=0
+    fv=$(framework_version)
+    pinned=$(_pinned_framework_version "$proj")
+    [[ -z "$pinned" ]] && pinned="<unpinned>"
+
+    local entry src dest src_sha dest_sha
+    for entry in "${VENDORED_FILES[@]}"; do
+        src="${entry%%:*}"
+        dest="${entry##*:}"
+        if [[ ! -r "$TARGET/$dest" ]]; then
+            drift=$(( drift + 1 ))
+            continue
+        fi
+        src_sha=$(sha256sum "$FRAMEWORK_HOME/$src" | awk '{print $1}')
+        dest_sha=$(sha256sum "$TARGET/$dest" | awk '{print $1}')
+        [[ "$src_sha" == "$dest_sha" ]] || drift=$(( drift + 1 ))
+    done
+
+    printf 'framework=%s pinned=%s drift=%d\n' "$fv" "$pinned" "$drift"
+    [[ "$drift" -eq 0 && "$pinned" == "$fv" ]]
+}
+
+# -------------------------------------------------------------------------
+# Subcommand: upgrade (alias for `sync --bump`)
+# -------------------------------------------------------------------------
+cmd_upgrade() {
+    REMAINING=("--bump" "${REMAINING[@]}")
+    cmd_sync
+}
+
+# -------------------------------------------------------------------------
+# Subcommand: completion bash
+# -------------------------------------------------------------------------
+cmd_completion() {
+    local shell="${REMAINING[0]:-}"
+    case "$shell" in
+        bash) ;;
+        ""|-h|--help)
+            cat <<'H'
+Usage: pkg-framework completion bash
+
+Emit a bash-completion script on stdout. Source it (or drop into
+/etc/bash_completion.d/) for tab completion over subcommands and
+flags.
+H
+            return 0 ;;
+        *) die "completion: unknown shell '$shell' (only bash is supported)" ;;
+    esac
+
+    cat <<'COMPLETION'
+# pkg-framework bash completion. Source from ~/.bashrc:
+#   . <(pkg-framework completion bash)
+_pkg_framework_complete() {
+    local cur prev cmds
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    cmds="version new sync verify upgrade status doctor lint dry-run completion help"
+
+    if [[ "$COMP_CWORD" -eq 1 ]]; then
+        # shellcheck disable=SC2207
+        COMPREPLY=( $(compgen -W "$cmds" -- "$cur") )
+        return 0
+    fi
+
+    case "${COMP_WORDS[1]}" in
+        sync)
+            # shellcheck disable=SC2207
+            COMPREPLY=( $(compgen -W "--bump --framework-path --target" -- "$cur") ) ;;
+        verify)
+            # shellcheck disable=SC2207
+            COMPREPLY=( $(compgen -W "--quiet --framework-path --target" -- "$cur") ) ;;
+        new|status|lint|dry-run|upgrade)
+            # shellcheck disable=SC2207
+            COMPREPLY=( $(compgen -W "--framework-path --target" -- "$cur") ) ;;
+        completion)
+            # shellcheck disable=SC2207
+            COMPREPLY=( $(compgen -W "bash" -- "$cur") ) ;;
+    esac
+}
+complete -F _pkg_framework_complete pkg-framework
+COMPLETION
+}
+
+# -------------------------------------------------------------------------
 # Dispatch
 # -------------------------------------------------------------------------
 usage() {
@@ -315,9 +611,15 @@ usage: pkg-framework <subcommand> [args]
 
 subcommands:
   version                  print framework version
+  doctor                   environment preflight (required + optional tools)
   new <name>               scaffold pkg/ + .github/workflows in cwd
   sync [--bump]            refresh vendored files in this source repo
+  upgrade                  alias for `sync --bump`
   verify [--quiet]         sha256-check vendored files against upstream
+  status                   one-liner: framework=X pinned=Y drift=N
+  lint                     validate pkg/project.sh against the schema
+  dry-run                  print the fpm commands without executing them
+  completion bash          emit a bash completion script
 
 options (any subcommand):
   --framework-path PATH    upstream framework dir (default: derived from
@@ -332,19 +634,52 @@ main() {
         usage
         exit 64
     fi
+
+    # Pre-pass: peel off any global flags (--framework-path, --target)
+    # that the operator put BEFORE the subcommand. Anything else stays
+    # in $@ for the subcommand pickup below. Lets `pkg-framework
+    # --target X new foo` work as well as `pkg-framework new --target
+    # X foo`.
+    local _pre=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --framework-path|--target)
+                _pre+=("$1" "${2:-}")
+                shift 2
+                ;;
+            --framework-path=*|--target=*)
+                _pre+=("$1")
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+
+    if [[ $# -eq 0 ]]; then
+        usage
+        exit 64
+    fi
     local sub="$1"
     shift
     case "$sub" in
         -h|--help|help) usage; exit 0 ;;
     esac
 
-    parse_global_args "$@"
+    parse_global_args "${_pre[@]+"${_pre[@]}"}" "$@"
 
     case "$sub" in
-        version) cmd_version ;;
-        new)     cmd_new ;;
-        sync)    cmd_sync ;;
-        verify)  cmd_verify ;;
+        version)    cmd_version ;;
+        new)        cmd_new ;;
+        sync)       cmd_sync ;;
+        upgrade)    cmd_upgrade ;;
+        verify)     cmd_verify ;;
+        status)     cmd_status ;;
+        doctor)     cmd_doctor ;;
+        lint)       cmd_lint ;;
+        dry-run)    cmd_dry_run ;;
+        completion) cmd_completion ;;
         *)
             printf 'pkg-framework: unknown subcommand: %s\n' "$sub" >&2
             usage >&2
