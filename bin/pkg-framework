@@ -315,6 +315,138 @@ cmd_verify() {
 }
 
 # -------------------------------------------------------------------------
+# Subcommand: init (interactive wizard around `new`)
+#
+# Reads Cargo.toml, git remote, LICENSE, and git config to pre-fill the
+# manifest. Prompts only for fields it cannot detect. Then runs the
+# same scaffold as `new` and patches the resolved values into
+# pkg/project.sh.
+#
+# Non-interactive mode (--yes) accepts every detected default and
+# leaves anything undetected at the example value. Useful in CI to
+# scaffold a deterministic project for tests.
+# -------------------------------------------------------------------------
+cmd_init() {
+    ensure_target
+
+    local yes=0
+    local name=""
+    local arg
+    for arg in "${REMAINING[@]+"${REMAINING[@]}"}"; do
+        case "$arg" in
+            --yes|-y) yes=1 ;;
+            -h|--help)
+                cat <<H
+Usage: pkg-framework init [<name>] [--yes]
+
+Interactive scaffold. Reads Cargo.toml, git remote, LICENSE, and git
+config to autofill the manifest; prompts only for what cannot be
+detected. With --yes accepts every detected default without
+prompting (useful in CI).
+H
+                return 0
+                ;;
+            -*) die "init: unknown flag $arg" ;;
+            *)  [[ -z "$name" ]] && name=$arg || die "init: unexpected arg $arg" ;;
+        esac
+    done
+
+    # ---- detect ---------------------------------------------------------
+    local det_name="" det_summary="" det_homepage="" det_source=""
+    local det_license="" det_maintainer="" det_bin=""
+
+    if [[ -r "$TARGET/Cargo.toml" ]]; then
+        det_name=$(awk -F'"' '/^[[:space:]]*name[[:space:]]*=/ {print $2; exit}' "$TARGET/Cargo.toml")
+        det_summary=$(awk -F'"' '/^[[:space:]]*description[[:space:]]*=/ {print $2; exit}' "$TARGET/Cargo.toml")
+        det_license=$(awk -F'"' '/^[[:space:]]*license[[:space:]]*=/ {print $2; exit}' "$TARGET/Cargo.toml")
+        det_bin="$det_name"
+    fi
+
+    if git -C "$TARGET" rev-parse --git-dir >/dev/null 2>&1; then
+        local origin
+        origin=$(git -C "$TARGET" remote get-url origin 2>/dev/null || true)
+        if [[ -n "$origin" ]]; then
+            # Normalize git@github.com:owner/repo[.git] -> https://github.com/owner/repo
+            origin=${origin%.git}
+            case "$origin" in
+                git@*:*) origin="https://${origin#git@}"; origin=${origin/:/\/} ;;
+            esac
+            det_homepage=$origin
+            det_source=$origin
+        fi
+        local gname gemail
+        gname=$(git -C "$TARGET" config user.name 2>/dev/null || true)
+        gemail=$(git -C "$TARGET" config user.email 2>/dev/null || true)
+        [[ -n "$gname" && -n "$gemail" ]] && det_maintainer="$gname <$gemail>"
+    fi
+
+    # LICENSE first non-blank line (SPDX-License-Identifier preferred).
+    if [[ -z "$det_license" && -r "$TARGET/LICENSE" ]]; then
+        det_license=$(grep -oE 'SPDX-License-Identifier:[[:space:]]*[A-Za-z0-9.+-]+' \
+            "$TARGET/LICENSE" | head -1 | awk '{print $NF}')
+    fi
+
+    # Fall back to the supplied name argument.
+    [[ -z "$det_name" && -n "$name" ]] && det_name=$name
+
+    # ---- prompt ---------------------------------------------------------
+    local p_name p_summary p_homepage p_source p_license p_maintainer p_vendor
+    _ask() {
+        local label=$1 default=$2
+        if [[ "$yes" == "1" ]]; then
+            printf '%s\n' "$default"
+            return
+        fi
+        local reply
+        printf '  %s [%s]: ' "$label" "$default" >&2
+        IFS= read -r reply </dev/tty || reply=""
+        printf '%s\n' "${reply:-$default}"
+    }
+
+    [[ "$yes" == "1" ]] || printf 'pkg-framework init: detected values shown in brackets; press enter to accept.\n\n'
+    p_name=$(_ask       "PKG_NAME (debian-naming)"      "${det_name:-myproject}")
+    p_summary=$(_ask    "PKG_SUMMARY (one line)"        "${det_summary:-One-line description}")
+    p_homepage=$(_ask   "PKG_HOMEPAGE_URL"              "${det_homepage:-https://example.com/$p_name}")
+    p_source=$(_ask     "PKG_SOURCE_URL"                "${det_source:-$p_homepage}")
+    p_license=$(_ask    "PKG_LICENSE_SPDX"              "${det_license:-GPL-3.0-only}")
+    p_maintainer=$(_ask "PKG_MAINTAINER (Name <email>)" "${det_maintainer:-You <you@example.com>}")
+    p_vendor=$(_ask     "PKG_VENDOR"                    "Lou's Clues Labs")
+
+    # ---- scaffold via cmd_new ------------------------------------------
+    REMAINING=("$p_name")
+    cmd_new
+
+    # ---- patch project.sh with the prompted values ---------------------
+    local proj="$TARGET/pkg/project.sh"
+    [[ -r "$proj" ]] || die "init: scaffold did not produce $proj"
+
+    # Escape forward slashes for sed.
+    local _e
+    _e() { printf '%s' "$1" | sed -e 's/[\/&]/\\&/g'; }
+
+    sed -i.bak \
+        -e "s/^PKG_SUMMARY=.*/PKG_SUMMARY=\"$(_e "$p_summary")\"/" \
+        -e "s|^PKG_HOMEPAGE_URL=.*|PKG_HOMEPAGE_URL=\"$p_homepage\"|" \
+        -e "s|^PKG_SOURCE_URL=.*|PKG_SOURCE_URL=\"$p_source\"|" \
+        -e "s/^PKG_LICENSE_SPDX=.*/PKG_LICENSE_SPDX=\"$(_e "$p_license")\"/" \
+        -e "s/^PKG_LICENSE_NAME=.*/PKG_LICENSE_NAME=\"$(_e "$p_license")\"/" \
+        -e "s/^PKG_MAINTAINER=.*/PKG_MAINTAINER=\"$(_e "$p_maintainer")\"/" \
+        -e "s/^PKG_VENDOR=.*/PKG_VENDOR=\"$(_e "$p_vendor")\"/" \
+        "$proj"
+    rm -f "${proj}.bak"
+
+    # Best-effort PKG_BINARIES: if we detected a cargo bin name, swap it.
+    if [[ -n "$det_bin" ]]; then
+        sed -i.bak -E "s/^PKG_BINARIES=\\($det_name.*/PKG_BINARIES=($det_bin)/" "$proj"
+        sed -i.bak -E "s/^PKG_BINARIES=\\(myproject\\)/PKG_BINARIES=($det_bin)/" "$proj"
+        rm -f "${proj}.bak"
+    fi
+
+    printf '\ninit: pkg/project.sh populated. Review with:\n  $EDITOR %s\n' "$proj"
+    printf 'Then run:\n  pkg-framework lint\n  pkg-framework dry-run\n'
+}
+
+# -------------------------------------------------------------------------
 # Subcommand: doctor
 # -------------------------------------------------------------------------
 cmd_doctor() {
@@ -517,26 +649,66 @@ cmd_dry_run() {
 # -------------------------------------------------------------------------
 cmd_status() {
     ensure_target
+    local json=0
+    local arg
+    for arg in "${REMAINING[@]+"${REMAINING[@]}"}"; do
+        case "$arg" in
+            --json) json=1 ;;
+            -h|--help)
+                cat <<H
+Usage: pkg-framework status [--json]
+
+One-line summary of the vendored copy versus upstream:
+  framework=<v>  the upstream pkg-framework version
+  pinned=<v>     the FRAMEWORK_VERSION pinned in pkg/project.sh
+  drift=<n>      count of vendored files that differ from upstream
+
+Exit 0 only when drift == 0 AND pinned == framework. With --json
+emits a parseable envelope on stdout instead of the human one-liner.
+H
+                return 0
+                ;;
+            *) die "status: unknown flag $arg" ;;
+        esac
+    done
+
     local proj="$TARGET/pkg/project.sh"
     local fv pinned drift=0
     fv=$(framework_version)
     pinned=$(_pinned_framework_version "$proj")
     [[ -z "$pinned" ]] && pinned="<unpinned>"
 
-    local entry src dest src_sha dest_sha
+    local entry src dest src_sha dest_sha drifted_files=()
     for entry in "${VENDORED_FILES[@]}"; do
         src="${entry%%:*}"
         dest="${entry##*:}"
         if [[ ! -r "$TARGET/$dest" ]]; then
             drift=$(( drift + 1 ))
+            drifted_files+=("$dest")
             continue
         fi
         src_sha=$(sha256sum "$FRAMEWORK_HOME/$src" | awk '{print $1}')
         dest_sha=$(sha256sum "$TARGET/$dest" | awk '{print $1}')
-        [[ "$src_sha" == "$dest_sha" ]] || drift=$(( drift + 1 ))
+        if [[ "$src_sha" != "$dest_sha" ]]; then
+            drift=$(( drift + 1 ))
+            drifted_files+=("$dest")
+        fi
     done
 
-    printf 'framework=%s pinned=%s drift=%d\n' "$fv" "$pinned" "$drift"
+    if [[ "$json" == "1" ]]; then
+        local files_json="[]"
+        if [[ "${#drifted_files[@]}" -gt 0 ]]; then
+            local f joined
+            for f in "${drifted_files[@]}"; do
+                joined+="\"$f\","
+            done
+            files_json="[${joined%,}]"
+        fi
+        printf '{"schema":"pkg-framework-status/1","framework":"%s","pinned":"%s","drift":%d,"drifted_files":%s}\n' \
+            "$fv" "$pinned" "$drift" "$files_json"
+    else
+        printf 'framework=%s pinned=%s drift=%d\n' "$fv" "$pinned" "$drift"
+    fi
     [[ "$drift" -eq 0 && "$pinned" == "$fv" ]]
 }
 
@@ -575,7 +747,7 @@ _pkg_framework_complete() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    cmds="version new sync verify upgrade status doctor lint dry-run completion help"
+    cmds="version new init sync verify upgrade status doctor lint dry-run completion help"
 
     if [[ "$COMP_CWORD" -eq 1 ]]; then
         # shellcheck disable=SC2207
@@ -590,9 +762,9 @@ _pkg_framework_complete() {
         verify)
             # shellcheck disable=SC2207
             COMPREPLY=( $(compgen -W "--quiet --framework-path --target" -- "$cur") ) ;;
-        new|status|lint|dry-run|upgrade)
+        new|status|lint|dry-run|upgrade|init)
             # shellcheck disable=SC2207
-            COMPREPLY=( $(compgen -W "--framework-path --target" -- "$cur") ) ;;
+            COMPREPLY=( $(compgen -W "--framework-path --target --yes" -- "$cur") ) ;;
         completion)
             # shellcheck disable=SC2207
             COMPREPLY=( $(compgen -W "bash" -- "$cur") ) ;;
@@ -613,10 +785,12 @@ subcommands:
   version                  print framework version
   doctor                   environment preflight (required + optional tools)
   new <name>               scaffold pkg/ + .github/workflows in cwd
+  init [<name>] [--yes]    interactive scaffold (autofills from
+                           Cargo.toml, git remote, LICENSE, git config)
   sync [--bump]            refresh vendored files in this source repo
   upgrade                  alias for `sync --bump`
   verify [--quiet]         sha256-check vendored files against upstream
-  status                   one-liner: framework=X pinned=Y drift=N
+  status [--json]          one-liner: framework=X pinned=Y drift=N
   lint                     validate pkg/project.sh against the schema
   dry-run                  print the fpm commands without executing them
   completion bash          emit a bash completion script
@@ -672,6 +846,7 @@ main() {
     case "$sub" in
         version)    cmd_version ;;
         new)        cmd_new ;;
+        init)       cmd_init ;;
         sync)       cmd_sync ;;
         upgrade)    cmd_upgrade ;;
         verify)     cmd_verify ;;

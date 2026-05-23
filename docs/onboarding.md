@@ -7,11 +7,32 @@ every PR. Copy-paste your way through the steps.
 
 ## Prerequisites
 
+One-line install (recommended):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lousclues-labs/pkg-integration/main/install.sh | sh
+```
+
+The installer clones into `~/.local/share/pkg-framework`, symlinks
+`~/.local/bin/pkg-framework`, and is idempotent (re-running upgrades).
+To pin a specific version, set `PKG_FRAMEWORK_REF`:
+
+```sh
+PKG_FRAMEWORK_REF=v1.2.0 curl -fsSL https://raw.githubusercontent.com/lousclues-labs/pkg-integration/main/install.sh | sh
+```
+
+Manual install (if you prefer):
+
 ```sh
 git clone git@github.com:lousclues-labs/pkg-integration.git \
     ~/.local/share/pkg-framework
 ln -sf ~/.local/share/pkg-framework/bin/pkg-framework ~/.local/bin/
-pkg-framework version    # expect 1.1.0 or newer
+```
+
+Confirm with:
+
+```sh
+pkg-framework version    # expect 1.2.0 or newer
 pkg-framework doctor     # confirms bash 4+, sha256sum, awk, sed, install
 ```
 
@@ -26,6 +47,18 @@ per entry in `PKG_BINARIES`):
 
 ```sh
 cd /path/to/my-rust-project
+pkg-framework init       # interactive: autofills from Cargo.toml, git, LICENSE
+```
+
+`init` reads `Cargo.toml` (name, description, license), `git remote
+get-url origin` (homepage + source URL), `LICENSE` (SPDX identifier),
+and `git config user.name/user.email` (maintainer). It prompts only
+for what cannot be detected. Add `--yes` to accept every detected
+default without prompting (deterministic; used in CI).
+
+For a non-interactive scaffold with no autofill, use the older verb:
+
+```sh
 pkg-framework new my-rust-project
 ```
 

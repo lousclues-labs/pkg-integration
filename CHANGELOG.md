@@ -9,6 +9,48 @@ major number.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-05-23
+
+Tier 3 from the post-split plan. Reduces the onboarding loop from
+"edit 12 fields in pkg/project.sh" to "answer 5 prompts (or pass
+--yes)." Adds a one-liner installer and an automated release
+pipeline so downstream consumers can pin to a release URL with a
+published sha256.
+
+### Added
+
+- `bin/pkg-framework init [<name>] [--yes]`. Interactive scaffold.
+  Reads `Cargo.toml` (name, description, license), `git remote
+  get-url origin` (homepage + source URL), `LICENSE` (SPDX), and
+  `git config user.name/email` (maintainer) to pre-fill the
+  manifest. Prompts only for what cannot be detected.  `--yes`
+  accepts every detected default without prompting (CI-friendly).
+- `bin/pkg-framework status --json`. Machine-readable envelope:
+  `{schema, framework, pinned, drift, drifted_files}`.
+  Schema `pkg-framework-status/1`. Useful for status checks in
+  consumer CI without parsing the human one-liner.
+- `install.sh`. POSIX-sh one-liner installer. Clones into
+  `~/.local/share/pkg-framework`, symlinks the cli into
+  `~/.local/bin`, and is idempotent for re-runs. Pins via
+  `PKG_FRAMEWORK_REF=v1.2.0` env var.
+- `.github/workflows/release.yml`. Triggered on `v*` tag push.
+  Builds a deterministic tarball (sorted, owner=0, mtime from the
+  tagged commit's `SOURCE_DATE_EPOCH`), computes its sha256,
+  extracts the matching `CHANGELOG.md` section, and creates a
+  GitHub Release with everything attached. Consumers can pin to
+  the release URL.
+- Smoke test extended with three new steps (10, 11, 12) covering
+  `status --json` (envelope shape + jq parse), `init --yes` end
+  to end (autofills + lints clean), and `install.sh` syntax
+  validation under `/bin/sh`. Total: 32 checks across 12 steps.
+
+### Changed
+
+- `docs/onboarding.md` now leads with the one-liner installer and
+  `pkg-framework init`. `new` remains documented as the
+  non-interactive fallback.
+- Bash completion includes `init` and offers `--yes`.
+
 ## [1.1.0] - 2026-05-23
 
 Onboarding-focused release. CI is wired, a smoke test proves the

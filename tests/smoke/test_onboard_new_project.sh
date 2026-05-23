@@ -144,6 +144,75 @@ fi
 assert_grep "refuses" "$tmp/new2.log" "second new mentions refuses"
 
 # -------------------------------------------------------------------------
+step "10. 'pkg-framework status --json' emits parseable envelope"
+# -------------------------------------------------------------------------
+json_out=$("$CLI" --framework-path "$FRAMEWORK_HOME" --target "$target" status --json 2>&1) || true
+assert_in_str "$json_out" '"schema":"pkg-framework-status/1"' "json envelope has schema"
+assert_in_str "$json_out" "\"framework\":\"$fv\"" "json envelope reports framework"
+assert_in_str "$json_out" "\"drift\":0"           "json envelope reports drift=0"
+if command -v jq >/dev/null 2>&1; then
+    if printf '%s' "$json_out" | jq empty 2>/dev/null; then
+        pass_msg "status --json parses under jq"
+    else
+        fail_msg "status --json failed jq parse"
+    fi
+fi
+
+# -------------------------------------------------------------------------
+step "11. 'pkg-framework init --yes' autofills from Cargo.toml + git"
+# -------------------------------------------------------------------------
+init_project="init-target"
+init_target="$tmp/$init_project"
+mkdir -p "$init_target"
+cat > "$init_target/Cargo.toml" <<EOF
+[package]
+name = "$init_project"
+version = "0.1.0"
+description = "Smoke fixture for pkg-framework init"
+license = "MIT"
+EOF
+git -C "$init_target" init -q
+git -C "$init_target" remote add origin "git@github.com:lousclues-labs/$init_project.git"
+git -C "$init_target" config user.name  "Smoke"
+git -C "$init_target" config user.email "smoke@example.com"
+git -C "$init_target" commit --allow-empty -q -m init
+
+rc=0
+"$CLI" --framework-path "$FRAMEWORK_HOME" --target "$init_target" init --yes \
+    >"$tmp/init.log" 2>&1 || rc=$?
+assert_eq "$rc" "0" "init exits 0 with --yes"
+assert_file "$init_target/pkg/project.sh"
+if [[ -r "$init_target/pkg/project.sh" ]]; then
+    assert_grep "^PKG_NAME=$init_project\$"   "$init_target/pkg/project.sh" "init: PKG_NAME from Cargo.toml"
+    assert_grep "PKG_SUMMARY=\"Smoke fixture for pkg-framework init\"" \
+                                              "$init_target/pkg/project.sh" "init: PKG_SUMMARY from Cargo.toml"
+    assert_grep "PKG_LICENSE_SPDX=\"MIT\""    "$init_target/pkg/project.sh" "init: PKG_LICENSE_SPDX from Cargo.toml"
+    assert_grep "lousclues-labs/$init_project" \
+                                              "$init_target/pkg/project.sh" "init: source URL derived from git remote"
+    assert_grep "smoke@example.com"           "$init_target/pkg/project.sh" "init: maintainer from git config"
+fi
+
+# init must also produce a project that lints clean.
+rc=0
+"$CLI" --framework-path "$FRAMEWORK_HOME" --target "$init_target" lint \
+    >"$tmp/init-lint.log" 2>&1 || rc=$?
+assert_eq "$rc" "0" "init result lints clean"
+
+# -------------------------------------------------------------------------
+step "12. install.sh syntax (shellcheck via posix sh)"
+# -------------------------------------------------------------------------
+if [[ -r "$FRAMEWORK_HOME/install.sh" ]]; then
+    if sh -n "$FRAMEWORK_HOME/install.sh" 2>"$tmp/install-syntax.log"; then
+        pass_msg "install.sh parses under /bin/sh"
+    else
+        fail_msg "install.sh fails sh -n"
+        sed 's/^/    /' "$tmp/install-syntax.log" >&2
+    fi
+else
+    fail_msg "install.sh missing at repo root"
+fi
+
+# -------------------------------------------------------------------------
 printf '\n---\n'
 if [[ "$fail" -gt 0 ]]; then
     printf 'smoke FAILED (%d check(s))\n' "$fail" >&2

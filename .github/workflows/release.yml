@@ -1,0 +1,101 @@
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# pkg-framework release pipeline.
+#
+# Triggers on push of a v* tag. Builds a deterministic tarball of the
+# framework files, computes its sha256, extracts the matching section
+# from CHANGELOG.md, and creates a GitHub Release with everything
+# attached.
+#
+# Downstream consumers can then pin to a release URL:
+#   https://github.com/lousclues-labs/pkg-integration/releases/download/v1.2.0/pkg-framework-v1.2.0.tar.gz
+# with the sha256 sidecar verifiable as:
+#   https://github.com/lousclues-labs/pkg-integration/releases/download/v1.2.0/pkg-framework-v1.2.0.tar.gz.sha256
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: derive tag + version
+        id: meta
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          version="${tag#v}"
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          # sanity: VERSION file matches the tag
+          file_version=$(tr -d '\r\n' < VERSION)
+          if [ "$file_version" != "$version" ]; then
+            printf 'tag %s does not match VERSION file (%s)\n' "$tag" "$file_version" >&2
+            exit 1
+          fi
+
+      - name: build deterministic tarball
+        id: pack
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -eu
+          out="pkg-framework-${TAG}.tar.gz"
+          # SOURCE_DATE_EPOCH from the tag's commit, for reproducibility.
+          export SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct "$TAG")
+          # Tar with sorted file list, no owner/group, no mtime drift.
+          tar \
+              --sort=name \
+              --mtime="@${SOURCE_DATE_EPOCH}" \
+              --owner=0 --group=0 --numeric-owner \
+              --exclude='.git' \
+              --exclude='.github' \
+              --exclude='.gitignore' \
+              -czf "$out" \
+              bin docs lib tests \
+              CHANGELOG.md LICENSE README.md VERSION
+          sha=$(sha256sum "$out" | awk '{print $1}')
+          printf '%s  %s\n' "$sha" "$out" > "${out}.sha256"
+          printf 'tarball=%s\n' "$out" >> "$GITHUB_OUTPUT"
+          printf 'sha256=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+
+      - name: extract changelog section
+        id: notes
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -eu
+          # Use stateful awk to pull from "## [VERSION]" up to the next "## [" line.
+          # (Range expressions are unreliable when the end marker can match the start.)
+          awk -v v="$VERSION" '
+              $0 ~ "^## \\["v"\\]" { f=1; print; next }
+              f && /^## \[/        { exit }
+              f                    { print }
+          ' CHANGELOG.md > /tmp/notes.md
+          if [ ! -s /tmp/notes.md ]; then
+              printf 'no CHANGELOG section for %s; falling back to full file\n' "$VERSION" >&2
+              cp CHANGELOG.md /tmp/notes.md
+          fi
+          printf '%s\n' "tarball: ${{ steps.pack.outputs.tarball }}" >> /tmp/notes.md
+          printf '%s\n' "sha256:  ${{ steps.pack.outputs.sha256 }}" >> /tmp/notes.md
+
+      - name: publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: pkg-framework ${{ steps.meta.outputs.tag }}
+          body_path: /tmp/notes.md
+          files: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.tarball }}.sha256
+          fail_on_unmatched_files: true
