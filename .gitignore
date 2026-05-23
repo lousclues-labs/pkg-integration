@@ -1,0 +1,15 @@
+# editor scratch
+*~
+*.swp
+.DS_Store
+
+# local secrets (defense in depth; the working tree is also outside .git scope)
+*.key
+*.pem
+id_ed25519*
+id_rsa*
+.ssh/
+
+# build/test artifacts
+/tmp/
+*.log
