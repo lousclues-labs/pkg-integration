@@ -9,9 +9,14 @@ major number.
 
 ## [Unreleased]
 
-Audit followups from the v1.2.4 review. No behavior change for
-already-installed framework users; no manifest/CLI contract change.
-The on-disk layout for fresh installs and re-installs is new (A1).
+## [1.3.0] - 2026-05-24
+
+Minor bump because the on-disk install layout and the env-var
+surface changed. Consumer projects (vigil, shroud, the other repos
+that vendor pkg-framework) see no manifest or CLI contract change
+and require no action. Operators who curl|bash the installer get a
+new directory shape and a new env var the first time they upgrade,
+and `pkg-framework` resolves through it transparently.
 
 ### Added
 
@@ -71,15 +76,45 @@ The on-disk layout for fresh installs and re-installs is new (A1).
   invocation now includes `COPYRIGHT` and `SECURITY.md` alongside
   `LICENSE`, `README.md`, `CHANGELOG.md`, and `VERSION`.
 
+### Hardened
+
+Late review of the install.sh rewrite caught three edges. Folded
+into this same minor because the install.sh surface is new with
+v1.3.0 and shipping the rewrite without these would just queue up a
+v1.3.1.
+
+- **`migrate_legacy_layout` positive-marker guard.** The old
+  detection treated "ROOT exists, no `current` symlink, no
+  `versions/`" as proof of a legacy install. That false-positives
+  on a hand-mkdir'd ROOT or a ROOT containing only operator-placed
+  files (a `.envrc`, a README). The function now requires a marker
+  from the actual v1.2.4 layout (`bin/pkg-framework` or
+  `lib/framework.sh` directly under ROOT) before renaming anything
+  aside. Empty or operator-curated ROOTs are left alone.
+- **Stale `.staging.<id>.<pid>` sweep.** Interrupted installs
+  used to leak a `versions/.staging.<id>.<pid>` directory that no
+  later pass cleaned up. `install_via_tarball` and `install_via_git`
+  now `rm -rf versions/.staging.*` at the top of their bodies, so
+  retries do not accumulate.
+- **`prune_old_versions` input-domain comment.** The unquoted
+  `for v in $(ls ...)` loop is safe because every entry under
+  `versions/` is written by the installer using an id from
+  `ref_to_id`, which sanitises to `[A-Za-z0-9.+-]`. A comment now
+  documents the assumption so the next reader does not add a
+  shellcheck-disable and forget.
+
 ### Migration
 
 For consumers using the curl|bash one-liner, no action is required.
-The next install or `pkg-framework upgrade` (which is unaffected;
-upgrade only mutates a consumer repo's vendored files, not the
-framework install itself) leaves the framework on the new layout
+The next install or re-install lays down the new layout
 automatically. Operators who hardcoded `$PKG_FRAMEWORK_HOME` in
 their own scripts should switch to `$PKG_FRAMEWORK_ROOT`; the old
-name will be removed in v1.3.0.
+name will be removed in v1.4.0.
+
+The note in [1.2.4]'s text about `pkg-framework upgrade` still
+applies: `upgrade` mutates a consumer repo's vendored files and the
+pin, not the framework install. The install itself is upgraded by
+re-running this installer.
 
 ## [1.2.4] - 2026-05-24
 

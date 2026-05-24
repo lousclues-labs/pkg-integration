@@ -111,11 +111,19 @@ ref_to_id() {
 migrate_legacy_layout() {
     [ -e "$PKG_FRAMEWORK_ROOT" ] || return 0
     [ -L "$PKG_FRAMEWORK_ROOT/current" ] && return 0
-    # New layout already? (current is the only marker we trust.)
-    if [ -d "$PKG_FRAMEWORK_ROOT/versions" ] && [ ! -e "$PKG_FRAMEWORK_ROOT/bin/pkg-framework" ]; then
+    # Only treat the existing ROOT as a legacy install if we can see
+    # a marker file from the pre-v1.2.5 flat layout. Without this
+    # guard a hand-mkdir'd ROOT, or one containing only operator-
+    # placed files (a .envrc, a README), would get shunted aside to
+    # ROOT.legacy.<epoch> on first install. We want the legacy rename
+    # to fire when there really is a legacy install in the way, and
+    # not on an empty or operator-curated directory.
+    if [ ! -e "$PKG_FRAMEWORK_ROOT/bin/pkg-framework" ] \
+       && [ ! -e "$PKG_FRAMEWORK_ROOT/lib/framework.sh" ]; then
         return 0
     fi
-    # Old flat layout. Rename aside.
+    # Old flat layout (markers above are both present in v1.2.4 and
+    # earlier). Rename aside.
     epoch=$(date +%s 2>/dev/null || echo 'unknown')
     legacy="${PKG_FRAMEWORK_ROOT}.legacy.${epoch}"
     say "migrating pre-v1.2.5 flat layout: ${PKG_FRAMEWORK_ROOT} -> ${legacy}"
@@ -148,6 +156,14 @@ prune_old_versions() {
     cur_id="${cur_target#versions/}"
     # ls -t orders newest mtime first. We keep `current` always, plus
     # the next $keep entries; everything beyond that is dropped.
+    #
+    # Unquoted `for v in $(ls ...)` is normally a shellcheck no-no,
+    # but the input domain here is constrained: every entry under
+    # versions/ was written by install_via_tarball or install_via_git
+    # using an id from ref_to_id, which sanitises to [A-Za-z0-9.+-].
+    # No whitespace or shell-special chars can appear unless an
+    # operator hand-mkdir'd a directory in there (in which case they
+    # are on their own).
     n=0
     for v in $(cd "$PKG_FRAMEWORK_ROOT/versions" && ls -1t 2>/dev/null); do
         if [ "$v" = "$cur_id" ]; then continue; fi
@@ -203,6 +219,12 @@ install_via_tarball() {
 
     id=$(ref_to_id "$ref")
     mkdir -p "${PKG_FRAMEWORK_ROOT}/versions"
+    # Sweep any orphan .staging.<id>.<pid> dirs from previous
+    # interrupted runs. Leading-dot means ls (without -a) and the
+    # prune loop both ignored them, so they would otherwise leak on
+    # every retry. The glob is a no-op if nothing matches because of
+    # set -u; redirect stderr and tolerate the rc.
+    rm -rf "${PKG_FRAMEWORK_ROOT}/versions/.staging."* 2>/dev/null || true
     staging="${PKG_FRAMEWORK_ROOT}/versions/.staging.${id}.$$"
     rm -rf "$staging"
     mkdir -p "$staging"
@@ -236,6 +258,9 @@ install_via_git() {
 
     id=$(ref_to_id "$ref")
     mkdir -p "${PKG_FRAMEWORK_ROOT}/versions"
+    # Same orphan-staging sweep as install_via_tarball; see comment
+    # there for the rationale.
+    rm -rf "${PKG_FRAMEWORK_ROOT}/versions/.staging."* 2>/dev/null || true
     staging="${PKG_FRAMEWORK_ROOT}/versions/.staging.${id}.$$"
     rm -rf "$staging"
     say "cloning into versions/$id (ref=$ref)"
