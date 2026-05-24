@@ -9,6 +9,27 @@ major number.
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-05-24
+
+Patch release for downstream GitHub Actions cache enforcement. vigil
+synced v1.2.2 and hit a GitHub-hosted runner failure before CI could
+start because the vendored workflow template pinned an older
+`actions/cache` v4 commit that is now rejected by cache-action
+enforcement. The source of truth is the framework template, not vigil.
+
+### Fixed
+
+- Updated both `actions/cache` pins in `lib/pkg-build.yml.tmpl` from
+  the GitHub-rejected v4.0.2 commit to v4.3.0
+  (`0057852bfaa89a56745cba8c7296529d2fc39830`). Downstream consumers
+  that run `pkg-framework sync --bump` vendor the accepted cache
+  action pin and no longer fail before the workflow starts.
+- Added `tests/unit/test_workflow_action_pins.sh`, a regression check
+  that enforces SHA-pinned `uses:` lines with version comments in the
+  vendored workflow template, rejects floating tags, rejects missing
+  `# vX.Y.Z` comments, and prevents the deprecated cache commit from
+  being reintroduced.
+
 ## [1.2.2] - 2026-05-23
 
 Real-consumer fixes after vigil's first adoption. vigil hit ten
