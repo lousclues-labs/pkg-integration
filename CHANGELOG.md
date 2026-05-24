@@ -479,7 +479,7 @@ that complement the reference README.
   bytes individually instead of the three-byte UTF-8 sequence.
   Now uses `grep -F (literal em-dash)` against the literal codepoint.
 
-## [1.0.0] -- 2025-01-XX
+## [1.0.0] -- 2026-05-23
 
 Initial extraction. Folds vigil's and shroud's converged
 `pkg/build.sh` (sections 1 through 14) and `.github/workflows/
