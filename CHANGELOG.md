@@ -9,6 +9,78 @@ major number.
 
 ## [Unreleased]
 
+Audit followups from the v1.2.4 review. No behavior change for
+already-installed framework users; no manifest/CLI contract change.
+The on-disk layout for fresh installs and re-installs is new (A1).
+
+### Added
+
+- **`COPYRIGHT`** (A5). Project preamble plus a five-line pointer
+  to `LICENSE`. Separates the optional notices the project chooses
+  to publish (copyright statement, trademark disclaimer) from the
+  GPL-3.0 text itself.
+- **`tests/README.md`** (A7). Documents the harness contract, the
+  `_assert.sh` helper namespace, the unit-vs-smoke boundary, and
+  how to add a test.
+- **`tests/_TEMPLATE.sh`** (A7). Runnable skeleton an operator can
+  copy into `tests/unit/test_<name>.sh` and fill in. Exercises one
+  call of each assertion helper so the template doubles as a smoke
+  check for the helpers themselves.
+
+### Changed
+
+- **`install.sh`** (A1). Fresh installs now land at
+  `$PKG_FRAMEWORK_ROOT/versions/<id>/` and a `current` symlink
+  retargets to the newest version. Atomic swap is done with a temp
+  symlink plus `mv -f` (`rename(2)` on symlinks is atomic; the same
+  guarantee does NOT hold for non-empty directories, so the previous
+  `mv -fT` approach was unsound). Effects:
+  - Re-install cannot leave a half-extracted tree visible to a
+    concurrent `pkg-framework` invocation.
+  - Rollback is one symlink retarget; old versions remain in
+    `versions/<old-id>/` until pruned.
+  - New env var `PKG_FRAMEWORK_ROOT` (default
+    `${XDG_DATA_HOME:-$HOME/.local/share}/pkg-framework`). The
+    previous `PKG_FRAMEWORK_HOME` is honored as a deprecated alias
+    and emits a one-line deprecation notice.
+  - New env var `PKG_FRAMEWORK_KEEP` (default `2`) caps retained
+    old versions; older ones are pruned after a successful retarget.
+  - First run after upgrading detects the pre-v1.2.5 flat layout
+    and renames it to `$ROOT.legacy.<epoch>` rather than mutating
+    it in place. No data is removed.
+  - `bin/pkg-framework` is unchanged: it resolves its own real path
+    via `readlink -f` and derives `FRAMEWORK_HOME` from there, so
+    the `current` symlink is transparent to the CLI.
+- **`LICENSE`** (A5). Now contains only the verbatim GPL-3.0 text.
+  The project preamble moved to `COPYRIGHT`. This is what
+  GitHub's license detector expects; the previous file was not
+  recognized because the GPL header was not the first content.
+- **`SECURITY.md`** (A6). The PGP-key URL claim was removed. The
+  page never went live, and a security contact must not advertise
+  infrastructure it does not operate. Key exchange happens out of
+  band on first contact; reporters who need
+  encryption-in-transit should say so in their first email.
+- **`Makefile`** (A3). `lint-voice` no longer relies on
+  `grep -q` in an `if !` (which trips the `pipefail` + SIGPIPE
+  trap). It checks for matching files first, prints the offending
+  lines on stderr if any, then exits non-zero. `VOICE_FILES` now
+  covers `COPYRIGHT`, `SECURITY.md`, and every `tests/*.md`.
+  `SHELL_FILES` adds `install.sh` and `tests/_TEMPLATE.sh` so the
+  shellcheck gate covers them.
+- **`.github/workflows/release.yml`**. The release tarball
+  invocation now includes `COPYRIGHT` and `SECURITY.md` alongside
+  `LICENSE`, `README.md`, `CHANGELOG.md`, and `VERSION`.
+
+### Migration
+
+For consumers using the curl|bash one-liner, no action is required.
+The next install or `pkg-framework upgrade` (which is unaffected;
+upgrade only mutates a consumer repo's vendored files, not the
+framework install itself) leaves the framework on the new layout
+automatically. Operators who hardcoded `$PKG_FRAMEWORK_HOME` in
+their own scripts should switch to `$PKG_FRAMEWORK_ROOT`; the old
+name will be removed in v1.3.0.
+
 ## [1.2.4] - 2026-05-24
 
 Hotfix for a second-order case of the v1.2.2 finding #4. vigil hit

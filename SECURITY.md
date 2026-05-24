@@ -9,12 +9,18 @@ and what the supply-chain story is.
 
 ## Reporting a vulnerability
 
-Email **security@lousclues.com** (PGP encouraged; key fingerprint
-published at `https://lousclues.com/pgp`). Include:
+Email **security@lousclues.com**. Include:
 
 - The version (tag) and commit sha you tested.
 - Reproduction steps.
 - Impact assessment as you see it.
+
+PGP is not currently published. If you need encryption-in-transit
+before sharing details, say so in your first email and we will
+exchange a current key out of band. Removing the prior
+`lousclues.com/pgp` claim is intentional: the page never went live,
+and a security contact must not advertise infrastructure it does
+not operate.
 
 Expect a first reply within 72 hours. We will acknowledge, agree on
 a disclosure timeline (default: 90 days for issues that ship in

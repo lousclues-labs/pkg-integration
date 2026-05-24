@@ -67,7 +67,7 @@ jobs:
               --exclude='.gitignore' \
               -czf "$out" \
               bin docs lib tests \
-              CHANGELOG.md LICENSE README.md VERSION
+              CHANGELOG.md COPYRIGHT LICENSE README.md SECURITY.md VERSION
           sha=$(sha256sum "$out" | awk '{print $1}')
           printf '%s  %s\n' "$sha" "$out" > "${out}.sha256"
           printf 'tarball=%s\n' "$out" >> "$GITHUB_OUTPUT"
