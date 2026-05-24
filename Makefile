@@ -22,11 +22,13 @@ SHELLCHECK ?= shellcheck
 # Files under shellcheck. Keep this in sync with the CI workflow.
 SHELL_FILES := \
 	bin/pkg-framework \
+	install.sh \
 	lib/framework.sh \
 	lib/layout-check.sh \
 	lib/input-tests.sh \
 	tests/run_tests.sh \
 	tests/_assert.sh \
+	tests/_TEMPLATE.sh \
 	$(wildcard tests/unit/test_*.sh) \
 	$(wildcard tests/smoke/test_*.sh)
 
@@ -35,7 +37,10 @@ SHELL_FILES := \
 VOICE_FILES := \
 	README.md \
 	CHANGELOG.md \
+	COPYRIGHT \
+	SECURITY.md \
 	$(wildcard docs/*.md) \
+	$(wildcard tests/*.md) \
 	$(SHELL_FILES)
 
 help:
@@ -60,10 +65,9 @@ lint-shell: ## shellcheck (warning severity; SC2016 info findings are intentiona
 	@printf 'shellcheck: clean\n'
 
 lint-voice: ## em-dash gate (LOU_VOICE.md: zero em-dashes in added content)
-	@count=$$(grep -cF '—' $(VOICE_FILES) 2>/dev/null | awk -F: '{s+=$$2} END {print s+0}'); \
-	if [ "$$count" -gt 0 ]; then \
-		printf 'em-dash gate: FAIL (%d hit(s))\n' "$$count" >&2; \
-		grep -nF '—' $(VOICE_FILES) >&2 || true; \
+	@if grep -lF '—' $(VOICE_FILES) 2>/dev/null | grep -q .; then \
+		printf 'em-dash gate: FAIL\n' >&2; \
+		grep -nHF '—' $(VOICE_FILES) >&2 || true; \
 		exit 1; \
 	fi; \
 	printf 'em-dash gate: clean\n'
