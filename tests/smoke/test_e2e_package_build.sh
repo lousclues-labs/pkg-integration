@@ -40,7 +40,10 @@ mkdir -p "$shim_dir"
 cat > "$shim_dir/fpm" <<'SHIM'
 #!/usr/bin/env bash
 # fpm shim for pkg-framework e2e smoke. Records argv and emits a
-# minimal artifact at --package.
+# minimal artifact at --package. Also writes a `Created package`
+# log line to stdout to mimic real fpm; v1.2.4 ensures the framework
+# redirects that to stderr so it does not pollute the artifact-path
+# return channel.
 set -euo pipefail
 argv_log="${FPM_SHIM_ARGV_LOG:-/tmp/fpm_shim.argv}"
 # Record full argv NUL-delimited so multi-line args survive readback.
@@ -104,6 +107,12 @@ CTL
         ;;
 esac
 rm -rf "$work"
+
+# Mimic real fpm: write a "Created package" log line to stdout. The
+# framework's _pkg_fpm_{deb,rpm} must redirect this to stderr; if it
+# bleeds into the caller's $() capture, the smoke test below catches
+# it (the artifact path captured ends up multi-line / contains braces).
+printf '{:timestamp=>"2026-05-24T00:44:03Z", :message=>"Created package", :path=>"%s"}\n' "$out"
 SHIM
 chmod 0755 "$shim_dir/fpm"
 
@@ -169,12 +178,15 @@ if [[ "$rc" -ne 0 ]]; then
 fi
 
 # Stdout from _pkg_fpm_deb must be a single path with no embedded
-# newlines (i.e. no log lines bled in).
+# newlines (i.e. no log lines bled in) and no fpm "Created package"
+# log fragments (no braces, no `=>`).
 if [[ "$artifact_path" =~ $'\n' ]]; then
     fal "artifact path contains newline (log spam captured); full value:"
     printf '%s\n' "$artifact_path" | sed 's/^/      /' >&2
+elif [[ "$artifact_path" == *"{"* || "$artifact_path" == *"=>"* ]]; then
+    fal "artifact path contains fpm log fragments (Created package leak); value: $artifact_path"
 else
-    pass "artifact path is a single line: $artifact_path"
+    pass "artifact path is a single clean path: $artifact_path"
 fi
 [[ -f "$artifact_path" ]] && pass "artifact file exists" \
     || fal "artifact missing at $artifact_path"

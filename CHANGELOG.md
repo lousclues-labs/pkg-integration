@@ -9,6 +9,50 @@ major number.
 
 ## [Unreleased]
 
+## [1.2.4] - 2026-05-24
+
+Hotfix for a second-order case of the v1.2.2 finding #4. vigil hit
+this on the next CI run after upgrading to v1.2.3:
+
+    pkg-framework: ERROR: {:timestamp=>"...", :message=>"Created
+    package", :path=>"...rpm"}
+    /__w/vigil/vigil/dist/...rpm missing or empty
+
+### Root cause
+
+v1.2.2 routed the framework's own log/section/run chatter to stderr
+so `artifact=$(_pkg_fpm_deb)` would capture exactly the artifact
+path. The remaining hole: fpm itself writes a one-line
+`Created package` log to stdout on success. Our `_pkg_fpm_deb` /
+`_pkg_fpm_rpm` invoked fpm through `run`, which passed fpm's stdout
+straight through to the caller's command substitution. The captured
+artifact value became two lines (fpm's log line + our path),
+`_pkg_make_reproducible` and `_pkg_validate_artifact` then operated
+on the corrupted value and the build failed with `missing or empty`
+for an artifact that was in fact valid.
+
+### Fixed
+
+- `_pkg_fpm_deb` and `_pkg_fpm_rpm` redirect fpm's stdout to stderr.
+  The artifact-path return channel is now strictly the explicit
+  `printf '%s' "$out_file"` at the end of each function.
+
+### Tests
+
+- `tests/smoke/test_e2e_package_build.sh` fpm shim now writes a
+  `Created package` log line to stdout, mimicking real fpm.
+- Step 1 of the smoke now asserts the captured artifact path
+  contains no `{` and no `=>` (the exact fragments that bled
+  through pre-v1.2.4), not just "single line". A regression of
+  this class would have been silently green before.
+
+### Migration
+
+vigil and any consumer pinned to <= v1.2.3:
+
+    pkg-framework upgrade
+    pkg-framework verify
+
 ## [1.2.3] - 2026-05-24
 
 Patch release for downstream GitHub Actions cache enforcement. vigil
