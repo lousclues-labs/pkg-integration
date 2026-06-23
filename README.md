@@ -94,3 +94,13 @@ GPL-3.0-only. The artifacts produced by the framework inherit the
 SPDX license declared in the source project's `pkg/project.sh`
 (via fpm `--license`); the framework's license does not propagate to
 those artifacts.
+
+
+---
+
+<p align="center">
+  <img height="70" alt="lous clues" src="https://github.com/user-attachments/assets/ae4e80de-d4cc-48e0-86c0-4e3a419bbfdd" />&nbsp;&nbsp;<img height="70" alt="lous clues pkgs" src="https://github.com/user-attachments/assets/e512b7d3-cb29-44b8-bd1f-26c832ce38e6" />
+</p>
+
+<p align="center">
+</p>
