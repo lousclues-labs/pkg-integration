@@ -9,6 +9,29 @@ major number.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-17
+
+Patch release. A valid build could still fail at random in
+`_pkg_validate_artifact`. Consumer projects see no contract change;
+re-vendor with `pkg-framework sync --bump`.
+
+### Fixed
+
+- **The artifact listing no longer pipes into `head`.** v1.2.2
+  captured `dpkg-deb -c` (and `rpm -qpl`) into a variable so `head`
+  could not SIGPIPE the package tool, then printed it with
+  `printf '%s\n' "$listing" | head -20`. That kept the race: `printf`
+  writes a listing longer than its buffer in more than one write,
+  `head` exits after twenty lines, and `printf` dies of SIGPIPE (exit
+  141), which `set -o pipefail` turns into a failed build. A
+  consumer's reproducibility job failed so on a package its first pass
+  had built and checked, and passed when run again. The listing's
+  first twenty lines now come from `sed -n '1,20p' <<<"$listing"`,
+  with no producer to kill. Pinned by
+  `tests/unit/test_validate_artifact_listing.sh`, which lists 200,000
+  entries through stand-ins for `dpkg-deb` and `rpm`, and shows the old
+  line failing on the same listing.
+
 ## [1.3.0] - 2026-05-24
 
 Minor bump because the on-disk install layout and the env-var
