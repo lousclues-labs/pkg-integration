@@ -9,6 +9,31 @@ major number.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-18
+
+Minor release. The workflow template takes a dispatched version as data,
+and builds its RPMs on a Fedora release still supported. Re-vendor with
+`pkg-framework sync --bump`; the Fedora jobs and their artifacts are named
+`fedora-44` where they were `fedora-40`.
+
+### Security
+
+- **A dispatched version is never run as code.** The "derive version"
+  step wrote `${{ github.event.inputs.version }}` into its script, so
+  whoever could dispatch the workflow could run commands in the build. It
+  now reaches the shell through `env:` alone and must be a semantic
+  version, `MAJOR.MINOR.PATCH` with optional pre-release and build parts;
+  the version read from `Cargo.toml` is held to the same, and neither is
+  echoed. Pinned by `tests/unit/test_workflow_version_input.sh`, which
+  runs the step's own script against hostile values and failed on 1.3.1's
+  template.
+
+### Changed
+
+- **Fedora 44 replaces Fedora 40**, which reached its end of life in May
+  2025, in the build, install-test, and reproducibility jobs. The same
+  test keeps the matrix from an older release.
+
 ## [1.3.1] - 2026-10-17
 
 Patch release. A valid build could still fail at random in
