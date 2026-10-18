@@ -9,6 +9,44 @@ major number.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-10-18
+
+Patch release. A deb built with a revision passes the install test, and
+each action the workflow template pins names the release it is. Consumer
+projects see no contract change; re-vendor with `pkg-framework sync
+--bump`.
+
+### Fixed
+
+- **A deb's revision is not part of its version.** `layout-check.sh`
+  compared `dpkg-query`'s `${Version}`, `[epoch:]upstream[-revision]`,
+  with the upstream version the source project declares, so a consumer
+  that builds its debs with `--iteration`, as vigil does with one revision
+  for each codename, failed every deb install test with `installed
+  version 1.12.2-1 != expected 1.12.2`. The epoch and the last `-revision`
+  are now set aside before a mismatch is declared; an exact match is
+  still taken first, and an rpm's `%{VERSION}` carries no release. The
+  fix was made downstream first, in lousclues-pkg's copy as 1.0.1 and in
+  vigil's vendored copy as 1.2.5, and never here; these are its lines.
+  Pinned by `tests/unit/test_layout_check_installed_version.sh`, which
+  answers through a stand-in `dpkg-query` and failed three assertions on
+  1.4.0: a revision, an epoch, and a hyphen in the upstream version.
+- **Each pinned action names the release it is.** Through 1.4.0 the
+  template pinned `actions/checkout` to `b4ffde6`, v4.1.1, under the
+  comment `v4.1.7`. `tests/unit/test_workflow_action_pins.sh` now holds a
+  table of each pinned commit and the tag it was resolved from, and fails
+  a pin the table does not hold or a comment that names another release.
+
+### Changed
+
+- **The workflow's actions run on Node 24.** `actions/checkout` v7.0.1,
+  `actions/cache` v6.1.0, `actions/upload-artifact` v7.0.1, and
+  `actions/download-artifact` v8.0.1 replace v4.1.1, v4.3.0, v4.3.4, and
+  v4.1.8. Those target Node 20, which GitHub has deprecated: it forces
+  them onto Node 24 and warns on every run. These are the pins shroud's
+  vendored workflow has run since 2026-08-12, through sixteen `pkg-build`
+  runs, fifteen green and one cancelled.
+
 ## [1.4.0] - 2026-10-18
 
 Minor release. The workflow template takes a dispatched version as data,
