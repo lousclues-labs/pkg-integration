@@ -9,6 +9,36 @@ major number.
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-10-19
+
+Patch release. An rpm is the same whichever day it is built. Consumer
+projects see no contract change; re-vendor with `pkg-framework sync
+--bump`.
+
+### Fixed
+
+- **An rpm's changelog entry is dated by `SOURCE_DATE_EPOCH`.** fpm 1.16.0
+  writes a default `%changelog` entry into every rpm, dated by the day it
+  runs: its rpm backend, unlike its deb backend, never reads
+  `SOURCE_DATE_EPOCH`. Two builds of one commit on either side of midnight
+  UTC therefore differed in the header's `Changelogtime` alone. A
+  consumer's `reproducibility (fedora-44)` job failed so, its first pass
+  built at 23:51 UTC and its second at 00:05, and a rerun after midnight
+  failed the same way. `_pkg_fpm_rpm` now writes fpm's own entry itself,
+  dated by `SOURCE_DATE_EPOCH`, with fpm's rendering of the version and
+  release, and passes it with `--rpm-changelog`. Built twice in separate
+  Fedora 44 containers with fpm 1.16.0, a test package was byte for byte
+  the same, its entry dated Tue Nov 14 2023 for the default epoch.
+- **An rpm is reproducible without the project's help.** rpmbuild writes
+  the build host, in CI the container's ID, and the wall-clock build time
+  into the header unless told otherwise. `_pkg_fpm_rpm` now fixes the host
+  as `reproducible` and takes the build time and file times from
+  `SOURCE_DATE_EPOCH`; a project's own `--rpm-rpmbuild-define` from
+  `project_fpm_rpm_extra_args` comes later and wins. `_pkg_make_reproducible`
+  no longer claims that fpm and `SOURCE_DATE_EPOCH` alone gave a stable rpm
+  header. Pinned by `tests/unit/test_rpm_reproducible_by_default.sh`, which
+  failed six assertions on 1.4.1.
+
 ## [1.4.1] - 2026-10-18
 
 Patch release. A deb built with a revision passes the install test, and
