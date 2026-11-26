@@ -42,11 +42,20 @@ will catch it. Add a hook or open a framework PR instead.
 | `SOURCE_DATE_EPOCH_DEFAULT` | `1700000000` | Reproducibility epoch. |
 | `PKG_DEB_SECTION` | `net` | debian Section. |
 | `PKG_DEB_PRIORITY` | `optional` | debian Priority. |
+| `PKG_DEB_BUILD_VERSION` | unset | Set to `1` to accept identified builds and Debian candidates in the package entry point. RPM and projects that do not opt in keep exact Cargo version matching. |
 | `PKG_RPM_GROUP` | `Applications/System` | rpm Group. |
 | `PKG_CARGO_FEATURES` | unset | If set, build uses `--no-default-features --features "$PKG_CARGO_FEATURES"`. |
 | `PKG_CARGO_OFFLINE` | `0` | v1.2.2+. When `1`, the framework runs `cargo fetch --locked` first and then builds with `--frozen --offline`. Useful for hermetic / reproducibility audits. |
 | `PKG_DEB_ARTIFACT_SUFFIX` | unset | v1.2.2+. Injected between `${VERSION}` and `_amd64.deb` in the artifact filename so per-distro builds in one OUTDIR do not collide. Example: `-noble` produces `myproject_1.0.0-noble_amd64.deb`. |
 | `PKG_RPM_RELEASE` | `1` | v1.2.2+. fpm `--iteration` (rpm `Release:`) and the `N` in `${PKG_NAME}-${VERSION}-N.x86_64.rpm`. Set to a distro-tagged value (`1.fedora40`) when building multiple rpm variants into one OUTDIR. |
+
+With `PKG_DEB_BUILD_VERSION=1` and `DISTRO=deb`, pass `VERSION` as
+`X.Y.Z`, `X.Y.Z+N.gSHA` (7 to 40 lowercase hexadecimal digits), or
+`X.Y.Z~rc.N` (candidate number at least 1). The Cargo check compares the
+numeric `X.Y.Z` base to `[package].version`. The package retains the
+complete supplied version. Debian sorts `~rc.N` before the corresponding
+final version and sorts snapshot counts numerically. The shared workflow's
+manual version input continues to take ordinary semantic versions.
 
 ## Optional arrays
 

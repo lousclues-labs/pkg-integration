@@ -9,7 +9,8 @@
 #
 # Inputs (env, REQUIRED):
 #   DISTRO   -- deb | rpm
-#   VERSION  -- semver (must match Cargo.toml [package].version)
+#   VERSION  -- semver matching Cargo.toml [package].version, or a Debian
+#               build version when PKG_DEB_BUILD_VERSION=1
 #   OUTDIR   -- absolute path; artifact + manifest sidecar land here
 #
 # Inputs (env, OPTIONAL):

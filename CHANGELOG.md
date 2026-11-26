@@ -9,6 +9,12 @@ major number.
 
 ## [Unreleased]
 
+### Added
+
+- A project can opt into identified Debian builds and `~rc.N` candidates
+  while keeping the numeric version in Cargo. See
+  [the manifest contract](docs/customization-surface.md#optional-scalars).
+
 ## [1.4.2] - 2026-10-19
 
 Patch release. An rpm is the same whichever day it is built. Consumer

@@ -192,6 +192,20 @@ _pkg_validate_manifest() {
 # -------------------------------------------------------------------------
 # Section 4 -- Input + env validation (called per build invocation)
 # -------------------------------------------------------------------------
+_pkg_deb_build_version_enabled() {
+    [[ "${DISTRO:-}" == deb && "${PKG_DEB_BUILD_VERSION:-}" == 1 ]]
+}
+
+_pkg_deb_build_version_base() {
+    local number='(0|[1-9][0-9]*)'
+    local pattern="^(${number}\.${number}\.${number})(\+${number}\.g[0-9a-f]{7,40}|~rc\.[1-9][0-9]*)?$"
+    if [[ "$1" =~ $pattern ]]; then
+        printf '%s\n' "${BASH_REMATCH[1]}"
+    else
+        return 2
+    fi
+}
+
 _pkg_validate_env() {
     local rc=0
     if [[ -z "${DISTRO:-}" ]]; then
@@ -206,6 +220,12 @@ _pkg_validate_env() {
     if [[ -z "${VERSION:-}" ]]; then
         printf 'pkg-framework: ERROR: VERSION not set\n' >&2
         rc=2
+    elif _pkg_deb_build_version_enabled; then
+        if ! _pkg_deb_build_version_base "$VERSION" >/dev/null; then
+            printf 'pkg-framework: ERROR: VERSION=%s is not a release, git build, or Debian candidate version\n' \
+                "$VERSION" >&2
+            rc=2
+        fi
     elif [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.+-]+)?$ ]]; then
         printf 'pkg-framework: ERROR: VERSION=%s violates semver\n' "$VERSION" >&2
         rc=2
@@ -244,7 +264,11 @@ _pkg_validate_version_matches_cargo() {
         printf 'pkg-framework: WARN: could not parse [package].version from Cargo.toml\n' >&2
         return 0
     fi
-    if [[ "$VERSION" != "$cargo_ver" ]]; then
+    local package_ver="$VERSION"
+    if _pkg_deb_build_version_enabled && ! package_ver=$(_pkg_deb_build_version_base "$VERSION"); then
+        return 2
+    fi
+    if [[ "$package_ver" != "$cargo_ver" ]]; then
         printf 'pkg-framework: ERROR: VERSION=%s does not match Cargo.toml [package].version=%s\n' \
             "$VERSION" "$cargo_ver" >&2
         return 2
